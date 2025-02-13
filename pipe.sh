@@ -3,7 +3,7 @@
 # Pipe Node Manager — Custom Edition
 #
 # Скрипт для управления нодой Pipe:
-#   • Бинарный файл: https://dl.pipecdn.app/v0.2.4/pop
+#   • Бинарный файл: https://dl.pipecdn.app/v0.2.5/pop
 #
 # Возможности:
 #   - Установка ноды
@@ -26,7 +26,7 @@ declare -r NC='\033[0m'
 BASE_DIR="$HOME/pipenetwork"
 SERVICE_PATH="/etc/systemd/system/pipe-pop.service"
 BIN_NAME="pop"
-BIN_URL="https://dl.pipecdn.app/v0.2.4/pop"
+BIN_URL="https://dl.pipecdn.app/v0.2.5/pop"
 
 #------------------------------------------------------------------
 # Функция: Проверка наличия утилиты curl, установка при отсутствии
