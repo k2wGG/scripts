@@ -11,6 +11,9 @@
 #   - Обновление и удаление ноды
 #-----------------------------------------------------------
 
+# Адрес последней версии скрипта на GitHub (raw ссылка)
+REMOTE_SCRIPT_URL="https://raw.githubusercontent.com/k2wGG/scripts/refs/heads/main/pipe.sh"
+
 # Цвета (константы)
 declare -r RED='\033[0;31m'
 declare -r GREEN='\033[0;32m'
@@ -27,6 +30,32 @@ BASE_DIR="$HOME/pipenetwork"
 SERVICE_PATH="/etc/systemd/system/pipe-pop.service"
 BIN_NAME="pop"
 BIN_URL="https://dl.pipecdn.app/v0.2.5/pop"
+
+#------------------------------------------------------------------
+# Функция: Автоматическая проверка обновления скрипта
+#------------------------------------------------------------------
+check_for_script_update() {
+    local local_file="$0"
+    local tmp_file="/tmp/pipe_manager.sh.new"
+
+    # Скачиваем удалённую версию скрипта
+    curl -s -o "$tmp_file" "$REMOTE_SCRIPT_URL" || {
+        echo -e "${YELLOW}Не удалось проверить обновление скрипта.${NC}"
+        return 1
+    }
+
+    # Сравниваем файлы
+    if ! cmp -s "$local_file" "$tmp_file"; then
+        echo -e "${CYAN}Обнаружена новая версия скрипта. Выполняю обновление...${NC}"
+        cp "$tmp_file" "$local_file"
+        chmod +x "$local_file"
+        echo -e "${GREEN}Скрипт обновлён. Перезапустите его для применения изменений.${NC}"
+        rm -f "$tmp_file"
+        exit 0
+    else
+        rm -f "$tmp_file"
+    fi
+}
 
 #------------------------------------------------------------------
 # Функция: Проверка наличия утилиты curl, установка при отсутствии
@@ -258,6 +287,8 @@ show_menu() {
 #------------------------------------------------------------------
 main() {
     ensure_curl_installed
+    # Проверяем обновление скрипта
+    check_for_script_update
     while true; do
         clear
         show_logo
