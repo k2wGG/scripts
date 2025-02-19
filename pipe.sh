@@ -29,7 +29,7 @@ declare -r NC='\033[0m'
 BASE_DIR="$HOME/pipenetwork"
 SERVICE_PATH="/etc/systemd/system/pipe-pop.service"
 BIN_NAME="pop"
-BIN_URL="https://dl.pipecdn.app/v0.2.5/pop"
+BIN_URL="https://dl.pipecdn.app/v0.2.8/pop"
 
 #------------------------------------------------------------------
 # Функция: Автоматическая проверка обновления скрипта
