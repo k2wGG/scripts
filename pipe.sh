@@ -3,7 +3,7 @@
 # Pipe Node Manager — Custom Edition
 #
 # Скрипт для управления нодой Pipe:
-#   • Бинарный файл: https://dl.pipecdn.app/v0.2.5/pop
+#   • Бинарный файл: https://dl.pipecdn.app/v0.2.8/pop
 #
 # Возможности:
 #   - Установка ноды
@@ -30,6 +30,7 @@ BASE_DIR="$HOME/pipenetwork"
 SERVICE_PATH="/etc/systemd/system/pipe-pop.service"
 BIN_NAME="pop"
 BIN_URL="https://dl.pipecdn.app/v0.2.8/pop"
+NODE_PORT=8003
 
 #------------------------------------------------------------------
 # Функция: Автоматическая проверка обновления скрипта
@@ -38,13 +39,11 @@ check_for_script_update() {
     local local_file="$0"
     local tmp_file="/tmp/pipe_manager.sh.new"
 
-    # Скачиваем удалённую версию скрипта
     curl -s -o "$tmp_file" "$REMOTE_SCRIPT_URL" || {
         echo -e "${YELLOW}Не удалось проверить обновление скрипта.${NC}"
         return 1
     }
 
-    # Сравниваем файлы
     if ! cmp -s "$local_file" "$tmp_file"; then
         echo -e "${CYAN}Обнаружена новая версия скрипта. Выполняю обновление...${NC}"
         cp "$tmp_file" "$local_file"
@@ -64,6 +63,34 @@ ensure_curl_installed() {
     if ! command -v curl &>/dev/null; then
         echo -e "${YELLOW}curl не найден. Устанавливаю...${NC}"
         sudo apt update && sudo apt install -y curl
+    fi
+}
+
+#------------------------------------------------------------------
+# Функция: Проверка наличия утилиты upnpc, установка при отсутствии
+#------------------------------------------------------------------
+ensure_upnpc_installed() {
+    if ! command -v upnpc &>/dev/null; then
+        echo -e "${YELLOW}Утилита upnpc не найдена. Для автоматического UPnP проброса установите пакет miniupnpc.${NC}"
+    fi
+}
+
+#------------------------------------------------------------------
+# Функция: Попытка настройки UPnP-перенаправления
+#------------------------------------------------------------------
+setup_upnp() {
+    ensure_upnpc_installed
+    if command -v upnpc &>/dev/null; then
+        # Определяем локальный IP (первый адрес в списке)
+        local local_ip
+        local_ip=$(hostname -I | awk '{print $1}')
+        echo -e "${CYAN}Попытка настроить UPnP проброс порта ${NODE_PORT} для IP ${local_ip}...${NC}"
+        upnpc -a "$local_ip" ${NODE_PORT} ${NODE_PORT} TCP >/dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}UPnP проброс настроен успешно.${NC}"
+        else
+            echo -e "${RED}Не удалось настроить UPnP проброс. Настройте порт ${NODE_PORT} вручную.${NC}"
+        fi
     fi
 }
 
@@ -185,6 +212,9 @@ EOF
     sudo systemctl enable pipe-pop
     sudo systemctl start pipe-pop
     log_info "Сервис успешно запущен."
+
+    # Попытка настроить UPnP проброс порта
+    setup_upnp
 }
 
 #------------------------------------------------------------------
@@ -287,7 +317,6 @@ show_menu() {
 #------------------------------------------------------------------
 main() {
     ensure_curl_installed
-    # Проверяем обновление скрипта
     check_for_script_update
     while true; do
         clear
