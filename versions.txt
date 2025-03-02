@@ -1,3 +1,5 @@
 # versions.txt
 
 titan=1.0.0
+hype=1.0.0
+pipe=1.0.0
