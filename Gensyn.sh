@@ -184,33 +184,15 @@ update_node() {
     $DC logs node
 }
 
-# Функция просмотра логов с выбором сервиса
 show_logs() {
-    echo -e "\n${clrBold}${clrBlue}--- Просмотр логов ---${clrReset}\n"
-    echo -e "${clrCyan}Выберите сервис для просмотра логов:${clrReset}"
-    echo "  1) swarm_node"
-    echo "  2) fastapi"
-    echo "  3) otel-collector"
-    echo "  4) Назад"
-    echo -en "\nВведите номер: "
-    read -r log_choice
-    case $log_choice in
-        1)
-            cd ~/rl-swarm && docker-compose logs -f swarm_node
-            ;;
-        2)
-            cd ~/rl-swarm && docker-compose logs -f fastapi
-            ;;
-        3)
-            cd ~/rl-swarm && docker-compose logs -f otel-collector
-            ;;
-        4) return ;;
-        *)
-            echo -e "\n${clrRed}Неверный выбор, возвращаемся в меню.${clrReset}"
-            ;;
-    esac
-    echo -e "\nНажмите Ctrl+C для выхода из логов или Enter для возврата в меню..."
-    read -r
+    echo -e "\n${clrBold}${clrBlue}--- Просмотр логов узла ---${clrReset}\n"
+    if [ ! -d "$HOME/rl-swarm" ]; then
+        print_error "Папка узла не найдена. Сначала запустите узел."
+        return
+    fi
+    cd "$HOME/rl-swarm" || return
+    set_dc_command
+    $DC logs node
 }
 
 restart_node() {
@@ -248,7 +230,7 @@ while true; do
     echo -e "\n${clrBold}Выберите действие:${clrReset}"
     echo "  1) Запустить узел"
     echo "  2) Обновить узел"
-    echo "  3) Просмотр логов"
+    echo "  3) Посмотреть логи"
     echo "  4) Перезапустить узел"
     echo "  5) Удалить узел"
     echo "  6) Выход"
