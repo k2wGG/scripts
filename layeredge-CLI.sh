@@ -1,4 +1,3 @@
-
 #!/bin/bash
 ##############################################################################
 # 1. Настройки автообновления
@@ -164,7 +163,7 @@ EOF"
     sudo systemctl enable merkle.service
     sudo systemctl start merkle.service
     msg_success "Merkle-сервис запущен."
-    read -p "Нажмите Enter для просмотра логов (или Ctrl+C для отмены)..."
+    read -p "Нажмите Enter для просмотра логов (или Ctrl+C для отмены)..." dummy
     sudo journalctl -u merkle.service -f
 }
 
@@ -180,6 +179,8 @@ launchLightNode() {
         msg_error "Go не найден – проверьте установку."
         return
     fi
+
+    # Здесь указываем, что запускаем бинарник ~/light-node/light-node
     sudo bash -c "cat > /etc/systemd/system/light-node.service <<EOF
 [Unit]
 Description=Light Node Service
@@ -189,10 +190,10 @@ After=network.target
 User=${CURRENT_USER}
 WorkingDirectory=${HOME_DIR}/light-node
 ExecStartPre=${GO_BIN} build
-ExecStart=${HOME_DIR}/light-node
+ExecStart=${HOME_DIR}/light-node/light-node
 Restart=always
 RestartSec=10
-TimeoutStartSec=200
+TimeoutStartSec=300
 
 [Install]
 WantedBy=multi-user.target
@@ -201,7 +202,7 @@ EOF"
     sudo systemctl enable light-node.service
     sudo systemctl start light-node.service
     msg_success "Light Node запущен."
-    read -p "Нажмите Enter для просмотра логов (или Ctrl+C для отмены)..."
+    read -p "Нажмите Enter для просмотра логов (или Ctrl+C для отмены)..." dummy
     sudo journalctl -u light-node.service -f
 }
 
@@ -220,7 +221,7 @@ restartLightNode() {
     msg_info "Перезапускаю Light Node..."
     sudo systemctl restart light-node.service
     msg_success "Нода успешно перезапущена."
-    read -p "Нажмите Enter для просмотра логов (или Ctrl+C для отмены)..."
+    read -p "Нажмите Enter для просмотра логов (или Ctrl+C для отмены)..." dummy
     sudo journalctl -u light-node.service -f
 }
 
@@ -247,7 +248,7 @@ EOF
     cd ~ || exit 1
     sudo systemctl restart light-node.service
     msg_success "Нода обновлена и запущена."
-    read -p "Нажмите Enter для просмотра логов (или Ctrl+C для отмены)..."
+    read -p "Нажмите Enter для просмотра логов (или Ctrl+C для отмены)..." dummy
     sudo journalctl -u light-node.service -f
 }
 
@@ -269,7 +270,7 @@ removeLightNode() {
     else
         msg_info "Удаление отменено."
     fi
-    read -p "Нажмите Enter для продолжения..."
+    read -p "Нажмите Enter для продолжения..." dummy
 }
 
 ##############################################################################
