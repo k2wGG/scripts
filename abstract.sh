@@ -7,6 +7,30 @@ SCRIPT_VERSION="1.0.0"           # Текущая локальная верси�
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/abstract.sh"
 
+check_for_updates() {
+    remote_version=$(curl -s "$VERSIONS_FILE_URL" | grep "^$SCRIPT_NAME=" | cut -d'=' -f2)
+
+    if [[ -z "$remote_version" ]]; then
+        echo -e "\033[33m[!] Не удалось получить версию скрипта с сервера\033[0m"
+        return
+    fi
+
+    if [[ "$remote_version" != "$SCRIPT_VERSION" ]]; then
+        echo -e "\033[33m🔄 Доступна новая версия скрипта: $remote_version (текущая: $SCRIPT_VERSION)\033[0m"
+        read -rp "Хотите обновить сейчас? [y/N]: " confirm
+        if [[ "$confirm" == "y" || "$confirm" == "Y" ]]; then
+            curl -s "$SCRIPT_FILE_URL" -o "$0" && chmod +x "$0"
+            echo -e "\033[32m✅ Скрипт обновлен до версии $remote_version. Перезапустите его.\033[0m"
+            exit 0
+        else
+            echo -e "\033[36m➖ Продолжаем с текущей версией ($SCRIPT_VERSION)\033[0m"
+        fi
+    else
+        echo -e "\033[32m✅ Установлена актуальная версия скрипта ($SCRIPT_VERSION)\033[0m"
+    fi
+}
+
+
 ### === Настройка цветовой схемы === ###
 RED='\e[31m'
 GREEN='\e[32m'
@@ -161,4 +185,5 @@ main_menu() {
 }
 
 ### === Запуск скрипта === ###
+check_for_updates
 main_menu
