@@ -1,0 +1,660 @@
+(function() {
+    'use strict';
+
+    // Предотвращаем повторную инициализацию
+    if (window.uraniumClickerInitialized) return;
+    window.uraniumClickerInitialized = true;
+
+    // Основные настройки кликера
+    const config = {
+        clickInterval: 150,           // Интервал между кликами в миллисекундах
+        wallCount: 10,                // Количество "стен" (вертикальных линий) на конвейере
+        wallRange: { start: 10, end: 90 }, // Диапазон позиционирования в процентах (от 10% до 90% ширины)
+        wallPositions: [],
+        pointsPerWall: 10,            // Количество точек клика на каждой "стене"
+        gridMode: true,               // Режим «сетка» для распределения точек
+        debug: true,                  // Включить отладочные сообщения в консоли
+        isRunning: true,              // Флаг включённого кликерования
+        hitCount: 0,                  // Общее количество «попаданий» (кликов по нужным элементам)
+        recentHits: [],               // Массив для подсчёта кликов за последние 10 секунд
+        pointOpacity: 0.5,            // Прозрачность точки клика (от 0 до 1)
+        panelCollapsed: false         // Флаг свёрнутости панели управления
+    };
+
+    // Вычисляем позиции стен равномерно в указанном диапазоне
+    for (let i = 0; i < config.wallCount; i++) {
+        const range = config.wallRange.end - config.wallRange.start;
+        const position = config.wallRange.start + (range * i / (config.wallCount - 1));
+        config.wallPositions.push(Number(position.toFixed(1)));
+    }
+
+    const clickPoints = [];
+    let clickIntervalId = null;
+    let conveyorElement = null;
+    let shardCache = new Set();
+    let statsIntervalId = null;
+    const clickEffects = [];
+
+    // Функция поиска элемента конвейера
+    function findConveyorElement() {
+        return document.querySelector('.conveyor-track.ConveyorBelt_enhancedTrack__vMgYX');
+    }
+
+    // Безопасно отправляет событие клика по элементу с визуальным эффектом
+    function safeDispatchClick(element, x, y) {
+        if (!element || typeof element.dispatchEvent !== 'function') return false;
+        
+        try {
+            showClickEffect(x, y);
+            
+            // Имитация последовательности событий: нажатие, отпускание и клик
+            ['mousedown', 'mouseup', 'click'].forEach(eventType => {
+                const event = new MouseEvent(eventType, {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                    button: 0,
+                    buttons: eventType === 'mousedown' ? 1 : 0,
+                    clientX: x,
+                    clientY: y,
+                    screenX: x,
+                    screenY: y
+                });
+                element.dispatchEvent(event);
+            });
+            
+            return true;
+        } catch (err) {
+            console.error('Ошибка при отправке события клика:', err);
+            return false;
+        }
+    }
+
+    // Отображает визуальный эффект клика в указанной позиции
+    function showClickEffect(x, y) {
+        let effect = clickEffects.find(e => !e.active);
+        
+        if (!effect) {
+            const el = document.createElement('div');
+            el.className = 'uranium-click-effect';
+            el.style.cssText = `
+                position: fixed;
+                width: 30px;
+                height: 30px;
+                border-radius: 50%;
+                border: 2px solid #ffeb3b;
+                box-shadow: 0 0 10px rgba(255, 235, 59, 0.8);
+                pointer-events: none;
+                z-index: 10000;
+                opacity: 0;
+                transform: translate(-50%, -50%) scale(0.2);
+                transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+            `;
+            document.body.appendChild(el);
+            
+            effect = {
+                element: el,
+                active: false
+            };
+            clickEffects.push(effect);
+        }
+        
+        effect.active = true;
+        effect.element.style.left = `${x}px`;
+        effect.element.style.top = `${y}px`;
+        
+        setTimeout(() => {
+            effect.element.style.opacity = '1';
+            effect.element.style.transform = 'translate(-50%, -50%) scale(1)';
+            
+            setTimeout(() => {
+                effect.element.style.opacity = '0';
+                effect.element.style.transform = 'translate(-50%, -50%) scale(0.2)';
+                
+                setTimeout(() => {
+                    effect.active = false;
+                }, 300);
+            }, 200);
+        }, 0);
+    }
+
+    // Создаёт точку клика в заданной позиции (в процентах от размера контейнера)
+    function createClickPoint(container, xPercent, yPercent, color = 'rgba(255, 0, 0, 0.7)', size = 6) {
+        const rect = container.getBoundingClientRect();
+        const point = document.createElement('div');
+        point.className = 'uranium-click-point';
+        
+        const x = rect.left + (rect.width * xPercent / 100);
+        const y = rect.top + (rect.height * yPercent / 100);
+        
+        let adjustedColor = color;
+        if (color.includes('rgba')) {
+            adjustedColor = color.replace(/rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)/, 
+                                        `rgba($1,$2,$3,${config.pointOpacity})`);
+        }
+        
+        point.style.cssText = `
+            position: fixed;
+            left: ${x}px;
+            top: ${y}px;
+            width: ${size}px;
+            height: ${size}px;
+            background-color: ${adjustedColor};
+            border-radius: 50%;
+            z-index: 10000;
+            pointer-events: none;
+            transform: translate(-50%, -50%);
+            transition: transform 0.1s, background-color 0.1s;
+            box-shadow: 0 0 3px rgba(0,0,0,0.3);
+        `;
+        document.body.appendChild(point);
+        
+        point.actualX = x;
+        point.actualY = y;
+        point.xPercent = xPercent;
+        point.yPercent = yPercent;
+        point.color = adjustedColor;
+        point.size = size;
+        point.hitCount = 0;
+        
+        return point;
+    }
+
+    // Создаёт панель управления кликером
+    function createControlPanel() {
+        const panel = document.createElement('div');
+        panel.className = 'uranium-control-panel';
+        panel.style.cssText = `
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 10001;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-width: 180px;
+            transition: all 0.3s ease;
+        `;
+        
+        const headerContainer = document.createElement('div');
+        headerContainer.style.cssText = `
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+        `;
+        
+        const title = document.createElement('div');
+        title.textContent = 'Уран: Кликер v1.0';
+        title.style.fontWeight = 'bold';
+        headerContainer.appendChild(title);
+        
+        const collapseButton = document.createElement('button');
+        collapseButton.innerHTML = '⇱';
+        collapseButton.title = 'Свернуть/Развернуть панель';
+        collapseButton.style.cssText = `
+            background: none;
+            border: none;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            padding: 0 5px;
+            margin-left: 10px;
+        `;
+        
+        const contentContainer = document.createElement('div');
+        contentContainer.className = 'uranium-panel-content';
+        contentContainer.style.cssText = `
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            width: 100%;
+            overflow: hidden;
+            transition: height 0.3s ease, opacity 0.3s ease;
+        `;
+        
+        collapseButton.onclick = function() {
+            config.panelCollapsed = !config.panelCollapsed;
+            if (config.panelCollapsed) {
+                this.innerHTML = '⇲';
+                contentContainer.style.height = '0';
+                contentContainer.style.opacity = '0';
+                contentContainer.style.margin = '0';
+                panel.style.minWidth = 'auto';
+                panel.style.padding = '5px 10px';
+            } else {
+                this.innerHTML = '⇱';
+                contentContainer.style.height = 'auto';
+                contentContainer.style.opacity = '1';
+                contentContainer.style.margin = '8px 0 0 0';
+                panel.style.minWidth = '180px';
+                panel.style.padding = '10px';
+            }
+        };
+        
+        headerContainer.appendChild(collapseButton);
+        panel.appendChild(headerContainer);
+        
+        const toggleButton = document.createElement('button');
+        toggleButton.textContent = config.isRunning ? 'Остановить клики' : 'Начать клики';
+        toggleButton.style.cssText = `
+            padding: 5px 10px;
+            background-color: ${config.isRunning ? '#ff4444' : '#4CAF50'};
+            border: none;
+            border-radius: 3px;
+            color: white;
+            cursor: pointer;
+        `;
+        toggleButton.onclick = function() {
+            config.isRunning = !config.isRunning;
+            this.textContent = config.isRunning ? 'Остановить клики' : 'Начать клики';
+            this.style.backgroundColor = config.isRunning ? '#ff4444' : '#4CAF50';
+            
+            if (config.isRunning) {
+                startClicking();
+            } else {
+                stopClicking();
+            }
+        };
+        contentContainer.appendChild(toggleButton);
+        
+        const opacityContainer = document.createElement('div');
+        opacityContainer.style.cssText = `
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 5px;
+        `;
+        
+        const opacityLabel = document.createElement('div');
+        opacityLabel.textContent = 'Видимость точек:';
+        opacityLabel.style.fontSize = '12px';
+        opacityContainer.appendChild(opacityLabel);
+        
+        const opacityInput = document.createElement('input');
+        opacityInput.type = 'range';
+        opacityInput.min = '0';
+        opacityInput.max = '100';
+        opacityInput.step = '10';
+        opacityInput.value = config.pointOpacity * 100;
+        opacityInput.style.cssText = `
+            width: 80px;
+            height: 10px;
+        `;
+        opacityInput.onchange = function() {
+            const newOpacity = parseInt(this.value) / 100;
+            config.pointOpacity = newOpacity;
+            
+            clickPoints.forEach(point => {
+                const newColor = point.color.replace(/rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)/, 
+                                                   `rgba($1,$2,$3,${newOpacity})`);
+                point.style.backgroundColor = newColor;
+                point.color = newColor;
+            });
+        };
+        opacityContainer.appendChild(opacityInput);
+        
+        contentContainer.appendChild(opacityContainer);
+        
+        const intervalContainer = document.createElement('div');
+        intervalContainer.style.cssText = `
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 5px;
+        `;
+        
+        const intervalLabel = document.createElement('div');
+        intervalLabel.textContent = 'Интервал кликов:';
+        intervalLabel.style.fontSize = '12px';
+        intervalContainer.appendChild(intervalLabel);
+        
+        const intervalInput = document.createElement('input');
+        intervalInput.type = 'number';
+        intervalInput.min = '50';
+        intervalInput.max = '500';
+        intervalInput.step = '10';
+        intervalInput.value = config.clickInterval;
+        intervalInput.style.cssText = `
+            width: 60px;
+            padding: 3px;
+            border: 1px solid #555;
+            border-radius: 3px;
+            background-color: #333;
+            color: white;
+            font-size: 12px;
+        `;
+        intervalInput.onchange = function() {
+            const newInterval = parseInt(this.value);
+            if (newInterval >= 50 && newInterval <= 500) {
+                config.clickInterval = newInterval;
+                if (config.isRunning) {
+                    stopClicking();
+                    startClicking();
+                }
+            }
+        };
+        intervalContainer.appendChild(intervalInput);
+        
+        const intervalUnit = document.createElement('div');
+        intervalUnit.textContent = 'мс';
+        intervalUnit.style.fontSize = '12px';
+        intervalContainer.appendChild(intervalUnit);
+        
+        contentContainer.appendChild(intervalContainer);
+        
+        const hitCountDisplay = document.createElement('div');
+        hitCountDisplay.id = 'uranium-hit-count';
+        hitCountDisplay.style.cssText = `
+            margin-top: 5px;
+            font-size: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+        `;
+        
+        const totalHits = document.createElement('div');
+        totalHits.id = 'uranium-total-hits';
+        totalHits.textContent = `Всего попаданий: ${config.hitCount}`;
+        hitCountDisplay.appendChild(totalHits);
+        
+        const recentHits = document.createElement('div');
+        recentHits.id = 'uranium-recent-hits';
+        recentHits.textContent = `Скорость: 0 кликов/10 секунд`;
+        hitCountDisplay.appendChild(recentHits);
+        
+        contentContainer.appendChild(hitCountDisplay);
+        
+        const info = document.createElement('div');
+        const totalPoints = config.gridMode 
+            ? config.wallPositions.length * config.pointsPerWall
+            : config.wallPositions.length * config.pointsPerWall;
+        info.textContent = `Точек клика: ${totalPoints} (${config.wallRange.start}% - ${config.wallRange.end}%)`;
+        info.style.fontSize = '12px';
+        info.style.marginTop = '5px';
+        contentContainer.appendChild(info);
+        
+        const contactInfo = document.createElement('div');
+        contactInfo.style.cssText = `
+            margin-top: 8px;
+            font-size: 11px;
+            color: #aaa;
+            text-align: center;
+        `;
+        contactInfo.innerHTML = 'Связь с автором: <a href="https://t.me/nod3r" target="_blank" style="color: #3897f0; text-decoration: none;">@nod3r</a>';
+        contentContainer.appendChild(contactInfo);
+        
+        panel.appendChild(contentContainer);
+        document.body.appendChild(panel);
+        
+        return panel;
+    }
+
+    // Обновление статистики кликов (общее количество и скорость)
+    function updateStats() {
+        const totalHitsElement = document.getElementById('uranium-total-hits');
+        const recentHitsElement = document.getElementById('uranium-recent-hits');
+        
+        if (totalHitsElement) {
+            totalHitsElement.textContent = `Всего попаданий: ${config.hitCount}`;
+        }
+        
+        if (recentHitsElement) {
+            const now = Date.now();
+            config.recentHits = config.recentHits.filter(time => now - time < 10000);
+            const rate = config.recentHits.length;
+            recentHitsElement.textContent = `Скорость: ${rate} кликов/10 секунд`;
+        }
+    }
+
+    // Выделяет (анимирует) точку клика для лучшей визуальной обратной связи
+    function highlightPoint(point) {
+        const originalSize = point.size || 6;
+        point.style.transform = `translate(-50%, -50%) scale(1.5)`;
+        point.style.backgroundColor = 'rgba(255, 255, 0, 0.9)';
+        
+        setTimeout(() => {
+            point.style.transform = 'translate(-50%, -50%) scale(1)';
+            point.style.backgroundColor = point.color;
+        }, 150);
+        
+        point.hitCount++;
+    }
+
+    // Проверяет, является ли элемент целевым (так называемым "шардом")
+    function isShardElement(element) {
+        if (!element) return false;
+        
+        if (element.classList && (
+            element.classList.contains('uranium-shard') ||
+            element.classList.contains('ConveyorBelt_shard__ahX3F')
+        )) {
+            return true;
+        }
+        
+        const parent = element.closest('.uranium-shard, .ConveyorBelt_shard__ahX3F');
+        if (parent) return true;
+        
+        if (element.getAttribute && (
+            element.getAttribute('data-shard-id') ||
+            element.getAttribute('data-value')
+        )) {
+            return true;
+        }
+        
+        return false;
+    }
+
+    // Инициализация сетки точек клика на конвейере
+    function initClickGrid() {
+        conveyorElement = findConveyorElement();
+        if (!conveyorElement) {
+            console.error('Элемент конвейера не найден, пробуем снова через 1 секунду');
+            setTimeout(initClickGrid, 1000);
+            return;
+        }
+        
+        // Удаляем ранее созданные точки
+        clickPoints.forEach(point => point.remove());
+        clickPoints.length = 0;
+        
+        if (config.gridMode) {
+            const xPositions = config.wallPositions;
+            const yPositions = [];
+            
+            for (let i = 0; i < config.pointsPerWall; i++) {
+                const yPercent = 5 + (90 * i / (config.pointsPerWall - 1));
+                yPositions.push(Number(yPercent.toFixed(1)));
+            }
+            
+            const colors = [
+                'rgba(255, 0, 0, 0.7)',    
+                'rgba(0, 0, 255, 0.7)',    
+                'rgba(0, 255, 0, 0.7)',    
+                'rgba(255, 165, 0, 0.7)',  
+                'rgba(128, 0, 128, 0.7)',  
+                'rgba(0, 128, 128, 0.7)',  
+                'rgba(255, 0, 255, 0.7)',  
+                'rgba(128, 128, 0, 0.7)',  
+                'rgba(0, 255, 255, 0.7)',  
+                'rgba(128, 0, 0, 0.7)'     
+            ];
+            
+            for (let xIndex = 0; xIndex < xPositions.length; xIndex++) {
+                const xPercent = xPositions[xIndex];
+                const color = colors[xIndex % colors.length];
+                
+                for (let yIndex = 0; yIndex < yPositions.length; yIndex++) {
+                    const yPercent = yPositions[yIndex];
+                    const size = 4;
+                    const point = createClickPoint(conveyorElement, xPercent, yPercent, color, size);
+                    clickPoints.push(point);
+                }
+            }
+            
+            if (config.debug) {
+                console.log(`Создано ${clickPoints.length} точек клика для полного покрытия сетки`);
+            }
+        } else {
+            config.wallPositions.forEach((wallPercent, wallIndex) => {
+                const colors = [
+                    'rgba(255, 0, 0, 0.7)',    
+                    'rgba(0, 0, 255, 0.7)',    
+                    'rgba(0, 255, 0, 0.7)',    
+                    'rgba(255, 165, 0, 0.7)',  
+                    'rgba(128, 0, 128, 0.7)'   
+                ];
+                const color = colors[wallIndex % colors.length];
+                
+                for (let i = 0; i < config.pointsPerWall; i++) {
+                    const yPercent = (i + 1) * 100 / (config.pointsPerWall + 1);
+                    const point = createClickPoint(conveyorElement, wallPercent, yPercent, color);
+                    clickPoints.push(point);
+                }
+            });
+            
+            if (config.debug) {
+                console.log(`Создано ${clickPoints.length} точек клика для стен`);
+            }
+        }
+    }
+
+    // Обновляет позиции точек клика в зависимости от размеров и положения конвейера
+    function updateClickPointsPosition() {
+        if (!conveyorElement) return;
+        
+        const rect = conveyorElement.getBoundingClientRect();
+        clickPoints.forEach(point => {
+            const x = rect.left + (rect.width * point.xPercent / 100);
+            const y = rect.top + (rect.height * point.yPercent / 100);
+            
+            point.style.left = `${x}px`;
+            point.style.top = `${y}px`;
+            
+            point.actualX = x;
+            point.actualY = y;
+        });
+    }
+
+    // Выполняет клики по случайно выбранным точкам
+    function performClicks() {
+        if (!config.isRunning || !conveyorElement) return;
+        
+        updateClickPointsPosition();
+        
+        const pointCount = Math.min(5, clickPoints.length);
+        const selectedIndices = new Set();
+        
+        while (selectedIndices.size < pointCount) {
+            const randomIndex = Math.floor(Math.random() * clickPoints.length);
+            selectedIndices.add(randomIndex);
+        }
+        
+        for (const index of selectedIndices) {
+            const point = clickPoints[index];
+            if (!point) continue;
+            
+            const element = document.elementFromPoint(point.actualX, point.actualY);
+            
+            if (element && isShardElement(element)) {
+                highlightPoint(point);
+                
+                safeDispatchClick(element, point.actualX, point.actualY);
+                
+                const shardId = element.getAttribute('data-shard-id') || 
+                                (element.closest('[data-shard-id]')?.getAttribute('data-shard-id')) || 
+                                'unknown';
+                
+                if (!shardCache.has(shardId)) {
+                    shardCache.add(shardId);
+                    config.hitCount++;
+                    config.recentHits.push(Date.now());
+                    
+                    // Очищаем кэш, чтобы он не рос бесконечно
+                    if (shardCache.size > 100) {
+                        const oldestShard = Array.from(shardCache)[0];
+                        shardCache.delete(oldestShard);
+                    }
+                    
+                    if (config.debug) {
+                        const shardValue = element.getAttribute('data-value') || 
+                                          (element.closest('[data-value]')?.getAttribute('data-value')) || 
+                                          'unknown';
+                        console.log(`Клик по кристаллу ID: ${shardId}, значение: ${shardValue}`);
+                    }
+                }
+            }
+        }
+    }
+
+    // Запускает цикл кликов с указанным интервалом
+    function startClicking() {
+        if (clickIntervalId) return;
+        
+        clickIntervalId = setInterval(performClicks, config.clickInterval);
+        console.log('Кликер запущен, интервал: ' + config.clickInterval + ' мс');
+        
+        if (!statsIntervalId) {
+            statsIntervalId = setInterval(updateStats, 1000);
+        }
+    }
+
+    // Останавливает цикл кликов
+    function stopClicking() {
+        if (clickIntervalId) {
+            clearInterval(clickIntervalId);
+            clickIntervalId = null;
+            console.log('Кликер остановлен');
+        }
+        
+        if (statsIntervalId) {
+            clearInterval(statsIntervalId);
+            statsIntervalId = null;
+        }
+    }
+
+    // Обновляет позиции точек при изменении размеров окна или прокрутке
+    function handleViewportChange() {
+        updateClickPointsPosition();
+    }
+
+    // Основная функция инициализации кликера
+    function initializeClicker() {
+        console.log('Инициализация Uranium: Полного кликера v1.0...');
+        
+        initClickGrid();
+        
+        const panel = createControlPanel();
+        
+        window.addEventListener('resize', handleViewportChange);
+        window.addEventListener('scroll', handleViewportChange);
+        
+        setInterval(() => {
+            if (!conveyorElement || !document.body.contains(conveyorElement)) {
+                conveyorElement = findConveyorElement();
+                if (conveyorElement) {
+                    updateClickPointsPosition();
+                }
+            }
+        }, 2000);
+        
+        if (config.isRunning) {
+            startClicking();
+        }
+        
+        console.log('Инициализация завершена!');
+    }
+
+    // Запускаем инициализацию после загрузки документа
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => setTimeout(initializeClicker, 1000));
+    } else {
+        setTimeout(initializeClicker, 1000);
+    }
+})();
