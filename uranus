@@ -387,7 +387,7 @@
             color: #aaa;
             text-align: center;
         `;
-        contactInfo.innerHTML = 'Связь с автором: <a href="https://t.me/nod3r" target="_blank" style="color: #3897f0; text-decoration: none;">@nod3r</a>';
+        contactInfo.innerHTML = 'Связь: <a href="https://t.me/nod3r" target="_blank" style="color: #3897f0; text-decoration: none;">@nod3r</a>';
         contentContainer.appendChild(contactInfo);
         
         panel.appendChild(contentContainer);
