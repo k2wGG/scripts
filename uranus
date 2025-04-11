@@ -1,27 +1,33 @@
-(function() {
+(function () {
     'use strict';
 
     // Предотвращаем повторную инициализацию
     if (window.uraniumClickerInitialized) return;
     window.uraniumClickerInitialized = true;
 
-    // Основные настройки кликера
+    // Основные настройки кликера и дополнительные параметры случайности
     const config = {
-        clickInterval: 150,           // Интервал между кликами в миллисекундах
+        clickInterval: 150,           // Базовый интервал между кликами (мс)
         wallCount: 10,                // Количество "стен" (вертикальных линий) на конвейере
-        wallRange: { start: 10, end: 90 }, // Диапазон позиционирования в процентах (от 10% до 90% ширины)
+        wallRange: { start: 10, end: 90 }, // Диапазон позиций стен в процентах (от 10% до 90% ширины)
         wallPositions: [],
         pointsPerWall: 10,            // Количество точек клика на каждой "стене"
-        gridMode: true,               // Режим «сетка» для распределения точек
-        debug: true,                  // Включить отладочные сообщения в консоли
-        isRunning: true,              // Флаг включённого кликерования
-        hitCount: 0,                  // Общее количество «попаданий» (кликов по нужным элементам)
+        gridMode: true,               // Режим «сетка» распределения точек
+        debug: true,                  // Отладочные сообщения
+        isRunning: true,              // Флаг, включён ли кликер
+        hitCount: 0,                  // Общее количество "попаданий"
         recentHits: [],               // Массив для подсчёта кликов за последние 10 секунд
-        pointOpacity: 0.5,            // Прозрачность точки клика (от 0 до 1)
-        panelCollapsed: false         // Флаг свёрнутости панели управления
+        pointOpacity: 0.5,            // Прозрачность точек клика (0–1)
+        panelCollapsed: false,        // Флаг свёрнутости панели управления
+
+        // Дополнительные параметры для случайного поведения:
+        randomizeInterval: true,      // Использовать случайное изменение интервала между циклами кликов
+        intervalRandomMin: -20,       // Минимальное изменение интервала (мс)
+        intervalRandomMax: 20,        // Максимальное изменение интервала (мс)
+        maxClickOffset: 5             // Максимальное смещение координат клика (px)
     };
 
-    // Вычисляем позиции стен равномерно в указанном диапазоне
+    // Вычисляем равномерно позиции стен в указанном диапазоне
     for (let i = 0; i < config.wallCount; i++) {
         const range = config.wallRange.end - config.wallRange.start;
         const position = config.wallRange.start + (range * i / (config.wallCount - 1));
@@ -35,30 +41,32 @@
     let statsIntervalId = null;
     const clickEffects = [];
 
-    // Функция поиска элемента конвейера
+    // Функция для поиска элемента конвейера
     function findConveyorElement() {
         return document.querySelector('.conveyor-track.ConveyorBelt_enhancedTrack__vMgYX');
     }
 
-    // Безопасно отправляет событие клика по элементу с визуальным эффектом
+    // Отправляет событие клика по элементу с визуальным эффектом, добавляя случайное смещение
     function safeDispatchClick(element, x, y) {
         if (!element || typeof element.dispatchEvent !== 'function') return false;
         
         try {
             showClickEffect(x, y);
             
-            // Имитация последовательности событий: нажатие, отпускание и клик
+            // Для каждого события вычисляем случайное смещение (от -maxClickOffset до +maxClickOffset)
             ['mousedown', 'mouseup', 'click'].forEach(eventType => {
+                const randomOffsetX = Math.floor(Math.random() * (config.maxClickOffset * 2 + 1)) - config.maxClickOffset;
+                const randomOffsetY = Math.floor(Math.random() * (config.maxClickOffset * 2 + 1)) - config.maxClickOffset;
                 const event = new MouseEvent(eventType, {
                     bubbles: true,
                     cancelable: true,
                     view: window,
                     button: 0,
                     buttons: eventType === 'mousedown' ? 1 : 0,
-                    clientX: x,
-                    clientY: y,
-                    screenX: x,
-                    screenY: y
+                    clientX: x + randomOffsetX,
+                    clientY: y + randomOffsetY,
+                    screenX: x + randomOffsetX,
+                    screenY: y + randomOffsetY
                 });
                 element.dispatchEvent(event);
             });
@@ -70,7 +78,7 @@
         }
     }
 
-    // Отображает визуальный эффект клика в указанной позиции
+    // Отображает визуальный эффект клика (анимация круга)
     function showClickEffect(x, y) {
         let effect = clickEffects.find(e => !e.active);
         
@@ -118,7 +126,7 @@
         }, 0);
     }
 
-    // Создаёт точку клика в заданной позиции (в процентах от размера контейнера)
+    // Создаёт точку клика в заданной позиции (указывается в процентах от размеров контейнера)
     function createClickPoint(container, xPercent, yPercent, color = 'rgba(255, 0, 0, 0.7)', size = 6) {
         const rect = container.getBoundingClientRect();
         const point = document.createElement('div');
@@ -129,7 +137,7 @@
         
         let adjustedColor = color;
         if (color.includes('rgba')) {
-            adjustedColor = color.replace(/rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)/, 
+            adjustedColor = color.replace(/rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)/,
                                         `rgba($1,$2,$3,${config.pointOpacity})`);
         }
         
@@ -160,7 +168,7 @@
         return point;
     }
 
-    // Создаёт панель управления кликером
+    // Создаёт панель управления, где можно редактировать основные и расширенные настройки кликера
     function createControlPanel() {
         const panel = document.createElement('div');
         panel.className = 'uranium-control-panel';
@@ -219,7 +227,7 @@
             transition: height 0.3s ease, opacity 0.3s ease;
         `;
         
-        collapseButton.onclick = function() {
+        collapseButton.onclick = function () {
             config.panelCollapsed = !config.panelCollapsed;
             if (config.panelCollapsed) {
                 this.innerHTML = '⇲';
@@ -241,6 +249,7 @@
         headerContainer.appendChild(collapseButton);
         panel.appendChild(headerContainer);
         
+        // Кнопка запуска/остановки кликов
         const toggleButton = document.createElement('button');
         toggleButton.textContent = config.isRunning ? 'Остановить клики' : 'Начать клики';
         toggleButton.style.cssText = `
@@ -251,7 +260,7 @@
             color: white;
             cursor: pointer;
         `;
-        toggleButton.onclick = function() {
+        toggleButton.onclick = function () {
             config.isRunning = !config.isRunning;
             this.textContent = config.isRunning ? 'Остановить клики' : 'Начать клики';
             this.style.backgroundColor = config.isRunning ? '#ff4444' : '#4CAF50';
@@ -264,6 +273,7 @@
         };
         contentContainer.appendChild(toggleButton);
         
+        // Настройка видимости точек
         const opacityContainer = document.createElement('div');
         opacityContainer.style.cssText = `
             display: flex;
@@ -271,12 +281,10 @@
             gap: 5px;
             margin-top: 5px;
         `;
-        
         const opacityLabel = document.createElement('div');
         opacityLabel.textContent = 'Видимость точек:';
         opacityLabel.style.fontSize = '12px';
         opacityContainer.appendChild(opacityLabel);
-        
         const opacityInput = document.createElement('input');
         opacityInput.type = 'range';
         opacityInput.min = '0';
@@ -287,21 +295,20 @@
             width: 80px;
             height: 10px;
         `;
-        opacityInput.onchange = function() {
+        opacityInput.onchange = function () {
             const newOpacity = parseInt(this.value) / 100;
             config.pointOpacity = newOpacity;
-            
             clickPoints.forEach(point => {
-                const newColor = point.color.replace(/rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)/, 
-                                                   `rgba($1,$2,$3,${newOpacity})`);
+                const newColor = point.color.replace(/rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)/,
+                    `rgba($1,$2,$3,${newOpacity})`);
                 point.style.backgroundColor = newColor;
                 point.color = newColor;
             });
         };
         opacityContainer.appendChild(opacityInput);
-        
         contentContainer.appendChild(opacityContainer);
         
+        // Настройка базового интервала кликов
         const intervalContainer = document.createElement('div');
         intervalContainer.style.cssText = `
             display: flex;
@@ -309,12 +316,10 @@
             gap: 5px;
             margin-top: 5px;
         `;
-        
         const intervalLabel = document.createElement('div');
         intervalLabel.textContent = 'Интервал кликов:';
         intervalLabel.style.fontSize = '12px';
         intervalContainer.appendChild(intervalLabel);
-        
         const intervalInput = document.createElement('input');
         intervalInput.type = 'number';
         intervalInput.min = '50';
@@ -330,7 +335,7 @@
             color: white;
             font-size: 12px;
         `;
-        intervalInput.onchange = function() {
+        intervalInput.onchange = function () {
             const newInterval = parseInt(this.value);
             if (newInterval >= 50 && newInterval <= 500) {
                 config.clickInterval = newInterval;
@@ -341,14 +346,13 @@
             }
         };
         intervalContainer.appendChild(intervalInput);
-        
         const intervalUnit = document.createElement('div');
         intervalUnit.textContent = 'мс';
         intervalUnit.style.fontSize = '12px';
         intervalContainer.appendChild(intervalUnit);
-        
         contentContainer.appendChild(intervalContainer);
         
+        // Отображение статистики кликов
         const hitCountDisplay = document.createElement('div');
         hitCountDisplay.id = 'uranium-hit-count';
         hitCountDisplay.style.cssText = `
@@ -358,45 +362,119 @@
             flex-direction: column;
             gap: 3px;
         `;
-        
         const totalHits = document.createElement('div');
         totalHits.id = 'uranium-total-hits';
         totalHits.textContent = `Всего попаданий: ${config.hitCount}`;
         hitCountDisplay.appendChild(totalHits);
-        
         const recentHits = document.createElement('div');
         recentHits.id = 'uranium-recent-hits';
         recentHits.textContent = `Скорость: 0 кликов/10 секунд`;
         hitCountDisplay.appendChild(recentHits);
-        
         contentContainer.appendChild(hitCountDisplay);
         
+        // Информация о количестве точек клика
         const info = document.createElement('div');
-        const totalPoints = config.gridMode 
-            ? config.wallPositions.length * config.pointsPerWall
-            : config.wallPositions.length * config.pointsPerWall;
+        const totalPoints = config.wallPositions.length * config.pointsPerWall;
         info.textContent = `Точек клика: ${totalPoints} (${config.wallRange.start}% - ${config.wallRange.end}%)`;
         info.style.fontSize = '12px';
         info.style.marginTop = '5px';
         contentContainer.appendChild(info);
         
+        // --- Расширенные настройки ---
+        const advancedHeader = document.createElement('div');
+        advancedHeader.textContent = 'Дополнительные настройки';
+        advancedHeader.style.fontWeight = 'bold';
+        advancedHeader.style.marginTop = '10px';
+        advancedHeader.style.fontSize = '13px';
+        contentContainer.appendChild(advancedHeader);
+
+        const advancedContainer = document.createElement('div');
+        advancedContainer.style.cssText = `
+            border-top: 1px solid #555; 
+            padding-top: 8px; 
+            margin-top: 8px; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 5px;
+        `;
+
+        // Использовать случайный интервал (checkbox)
+        const randomIntervalLabel = document.createElement('label');
+        randomIntervalLabel.style.fontSize = '12px';
+        randomIntervalLabel.textContent = 'Использовать случайный интервал: ';
+        const randomIntervalCheckbox = document.createElement('input');
+        randomIntervalCheckbox.type = 'checkbox';
+        randomIntervalCheckbox.checked = config.randomizeInterval;
+        randomIntervalCheckbox.onchange = function() {
+            config.randomizeInterval = this.checked;
+        };
+        randomIntervalLabel.appendChild(randomIntervalCheckbox);
+        advancedContainer.appendChild(randomIntervalLabel);
+
+        // Минимальное изменение интервала
+        const intervalMinLabel = document.createElement('label');
+        intervalMinLabel.style.fontSize = '12px';
+        intervalMinLabel.textContent = 'Минимальное изменение интервала (мс): ';
+        const intervalMinInput = document.createElement('input');
+        intervalMinInput.type = 'number';
+        intervalMinInput.value = config.intervalRandomMin;
+        intervalMinInput.style.width = '60px';
+        intervalMinInput.onchange = function() {
+            config.intervalRandomMin = parseInt(this.value) || 0;
+        };
+        intervalMinLabel.appendChild(intervalMinInput);
+        advancedContainer.appendChild(intervalMinLabel);
+
+        // Максимальное изменение интервала
+        const intervalMaxLabel = document.createElement('label');
+        intervalMaxLabel.style.fontSize = '12px';
+        intervalMaxLabel.textContent = 'Максимальное изменение интервала (мс): ';
+        const intervalMaxInput = document.createElement('input');
+        intervalMaxInput.type = 'number';
+        intervalMaxInput.value = config.intervalRandomMax;
+        intervalMaxInput.style.width = '60px';
+        intervalMaxInput.onchange = function() {
+            config.intervalRandomMax = parseInt(this.value) || 0;
+        };
+        intervalMaxLabel.appendChild(intervalMaxInput);
+        advancedContainer.appendChild(intervalMaxLabel);
+
+        // Максимальное смещение клика
+        const offsetLabel = document.createElement('label');
+        offsetLabel.style.fontSize = '12px';
+        offsetLabel.textContent = 'Максимальное смещение клика (px): ';
+        const offsetInput = document.createElement('input');
+        offsetInput.type = 'number';
+        offsetInput.value = config.maxClickOffset;
+        offsetInput.style.width = '60px';
+        offsetInput.onchange = function() {
+            config.maxClickOffset = parseInt(this.value) || 0;
+        };
+        offsetLabel.appendChild(offsetInput);
+        advancedContainer.appendChild(offsetLabel);
+
+        contentContainer.appendChild(advancedContainer);
+        // --- Конец расширенных настроек ---
+
         const contactInfo = document.createElement('div');
         contactInfo.style.cssText = `
-            margin-top: 8px;
+            margin-top: 10px;
             font-size: 11px;
             color: #aaa;
             text-align: center;
+            border-top: 1px solid #555;
+            padding-top: 10px;
         `;
         contactInfo.innerHTML = 'Связь: <a href="https://t.me/nod3r" target="_blank" style="color: #3897f0; text-decoration: none;">@nod3r</a>';
         contentContainer.appendChild(contactInfo);
-        
+
         panel.appendChild(contentContainer);
         document.body.appendChild(panel);
         
         return panel;
     }
 
-    // Обновление статистики кликов (общее количество и скорость)
+    // Обновляет статистику кликов (общее количество и скорость)
     function updateStats() {
         const totalHitsElement = document.getElementById('uranium-total-hits');
         const recentHitsElement = document.getElementById('uranium-recent-hits');
@@ -413,9 +491,8 @@
         }
     }
 
-    // Выделяет (анимирует) точку клика для лучшей визуальной обратной связи
+    // Выделяет (анимирует) точку клика для визуальной обратной связи
     function highlightPoint(point) {
-        const originalSize = point.size || 6;
         point.style.transform = `translate(-50%, -50%) scale(1.5)`;
         point.style.backgroundColor = 'rgba(255, 255, 0, 0.9)';
         
@@ -430,28 +507,24 @@
     // Проверяет, является ли элемент целевым (так называемым "шардом")
     function isShardElement(element) {
         if (!element) return false;
-        
         if (element.classList && (
             element.classList.contains('uranium-shard') ||
             element.classList.contains('ConveyorBelt_shard__ahX3F')
         )) {
             return true;
         }
-        
         const parent = element.closest('.uranium-shard, .ConveyorBelt_shard__ahX3F');
         if (parent) return true;
-        
         if (element.getAttribute && (
             element.getAttribute('data-shard-id') ||
             element.getAttribute('data-value')
         )) {
             return true;
         }
-        
         return false;
     }
 
-    // Инициализация сетки точек клика на конвейере
+    // Инициализирует сетку точек клика на конвейере
     function initClickGrid() {
         conveyorElement = findConveyorElement();
         if (!conveyorElement) {
@@ -474,16 +547,16 @@
             }
             
             const colors = [
-                'rgba(255, 0, 0, 0.7)',    
-                'rgba(0, 0, 255, 0.7)',    
-                'rgba(0, 255, 0, 0.7)',    
-                'rgba(255, 165, 0, 0.7)',  
-                'rgba(128, 0, 128, 0.7)',  
-                'rgba(0, 128, 128, 0.7)',  
-                'rgba(255, 0, 255, 0.7)',  
-                'rgba(128, 128, 0, 0.7)',  
-                'rgba(0, 255, 255, 0.7)',  
-                'rgba(128, 0, 0, 0.7)'     
+                'rgba(255, 0, 0, 0.7)',
+                'rgba(0, 0, 255, 0.7)',
+                'rgba(0, 255, 0, 0.7)',
+                'rgba(255, 165, 0, 0.7)',
+                'rgba(128, 0, 128, 0.7)',
+                'rgba(0, 128, 128, 0.7)',
+                'rgba(255, 0, 255, 0.7)',
+                'rgba(128, 128, 0, 0.7)',
+                'rgba(0, 255, 255, 0.7)',
+                'rgba(128, 0, 0, 0.7)'
             ];
             
             for (let xIndex = 0; xIndex < xPositions.length; xIndex++) {
@@ -504,21 +577,19 @@
         } else {
             config.wallPositions.forEach((wallPercent, wallIndex) => {
                 const colors = [
-                    'rgba(255, 0, 0, 0.7)',    
-                    'rgba(0, 0, 255, 0.7)',    
-                    'rgba(0, 255, 0, 0.7)',    
-                    'rgba(255, 165, 0, 0.7)',  
-                    'rgba(128, 0, 128, 0.7)'   
+                    'rgba(255, 0, 0, 0.7)',
+                    'rgba(0, 0, 255, 0.7)',
+                    'rgba(0, 255, 0, 0.7)',
+                    'rgba(255, 165, 0, 0.7)',
+                    'rgba(128, 0, 128, 0.7)'
                 ];
                 const color = colors[wallIndex % colors.length];
-                
                 for (let i = 0; i < config.pointsPerWall; i++) {
                     const yPercent = (i + 1) * 100 / (config.pointsPerWall + 1);
                     const point = createClickPoint(conveyorElement, wallPercent, yPercent, color);
                     clickPoints.push(point);
                 }
             });
-            
             if (config.debug) {
                 console.log(`Создано ${clickPoints.length} точек клика для стен`);
             }
@@ -528,15 +599,12 @@
     // Обновляет позиции точек клика в зависимости от размеров и положения конвейера
     function updateClickPointsPosition() {
         if (!conveyorElement) return;
-        
         const rect = conveyorElement.getBoundingClientRect();
         clickPoints.forEach(point => {
             const x = rect.left + (rect.width * point.xPercent / 100);
             const y = rect.top + (rect.height * point.yPercent / 100);
-            
             point.style.left = `${x}px`;
             point.style.top = `${y}px`;
-            
             point.actualX = x;
             point.actualY = y;
         });
@@ -545,46 +613,34 @@
     // Выполняет клики по случайно выбранным точкам
     function performClicks() {
         if (!config.isRunning || !conveyorElement) return;
-        
         updateClickPointsPosition();
-        
         const pointCount = Math.min(5, clickPoints.length);
         const selectedIndices = new Set();
-        
         while (selectedIndices.size < pointCount) {
             const randomIndex = Math.floor(Math.random() * clickPoints.length);
             selectedIndices.add(randomIndex);
         }
-        
         for (const index of selectedIndices) {
             const point = clickPoints[index];
             if (!point) continue;
-            
             const element = document.elementFromPoint(point.actualX, point.actualY);
-            
             if (element && isShardElement(element)) {
                 highlightPoint(point);
-                
                 safeDispatchClick(element, point.actualX, point.actualY);
-                
-                const shardId = element.getAttribute('data-shard-id') || 
-                                (element.closest('[data-shard-id]')?.getAttribute('data-shard-id')) || 
+                const shardId = element.getAttribute('data-shard-id') ||
+                                (element.closest('[data-shard-id]')?.getAttribute('data-shard-id')) ||
                                 'unknown';
-                
                 if (!shardCache.has(shardId)) {
                     shardCache.add(shardId);
                     config.hitCount++;
                     config.recentHits.push(Date.now());
-                    
-                    // Очищаем кэш, чтобы он не рос бесконечно
                     if (shardCache.size > 100) {
                         const oldestShard = Array.from(shardCache)[0];
                         shardCache.delete(oldestShard);
                     }
-                    
                     if (config.debug) {
-                        const shardValue = element.getAttribute('data-value') || 
-                                          (element.closest('[data-value]')?.getAttribute('data-value')) || 
+                        const shardValue = element.getAttribute('data-value') ||
+                                          (element.closest('[data-value]')?.getAttribute('data-value')) ||
                                           'unknown';
                         console.log(`Клик по кристаллу ID: ${shardId}, значение: ${shardValue}`);
                     }
@@ -593,13 +649,19 @@
         }
     }
 
-    // Запускает цикл кликов с указанным интервалом
+    // Запускает цикл кликов с заданным интервалом с учетом случайного изменения интервала
     function startClicking() {
         if (clickIntervalId) return;
-        
-        clickIntervalId = setInterval(performClicks, config.clickInterval);
-        console.log('Кликер запущен, интервал: ' + config.clickInterval + ' мс');
-        
+        function clickCycle() {
+            performClicks();
+            let offset = 0;
+            if (config.randomizeInterval) {
+                offset = Math.floor(Math.random() * (config.intervalRandomMax - config.intervalRandomMin + 1)) + config.intervalRandomMin;
+            }
+            clickIntervalId = setTimeout(clickCycle, config.clickInterval + offset);
+        }
+        clickCycle();
+        console.log('Кликер запущен, базовый интервал: ' + config.clickInterval + ' мс');
         if (!statsIntervalId) {
             statsIntervalId = setInterval(updateStats, 1000);
         }
@@ -608,11 +670,10 @@
     // Останавливает цикл кликов
     function stopClicking() {
         if (clickIntervalId) {
-            clearInterval(clickIntervalId);
+            clearTimeout(clickIntervalId);
             clickIntervalId = null;
             console.log('Кликер остановлен');
         }
-        
         if (statsIntervalId) {
             clearInterval(statsIntervalId);
             statsIntervalId = null;
@@ -626,15 +687,11 @@
 
     // Основная функция инициализации кликера
     function initializeClicker() {
-        console.log('Инициализация Uranium: Полного кликера v1.0...');
-        
+        console.log('Инициализация Uranium: Кликер v1.0...');
         initClickGrid();
-        
-        const panel = createControlPanel();
-        
+        createControlPanel();
         window.addEventListener('resize', handleViewportChange);
         window.addEventListener('scroll', handleViewportChange);
-        
         setInterval(() => {
             if (!conveyorElement || !document.body.contains(conveyorElement)) {
                 conveyorElement = findConveyorElement();
@@ -643,15 +700,13 @@
                 }
             }
         }, 2000);
-        
         if (config.isRunning) {
             startClicking();
         }
-        
         console.log('Инициализация завершена!');
     }
 
-    // Запускаем инициализацию после загрузки документа
+    // Запуск инициализации после загрузки документа
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => setTimeout(initializeClicker, 1000));
     } else {
