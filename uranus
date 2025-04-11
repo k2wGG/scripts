@@ -294,6 +294,8 @@
         opacityInput.style.cssText = `
             width: 80px;
             height: 10px;
+            background-color: #333;
+            color: #fff;
         `;
         opacityInput.onchange = function () {
             const newOpacity = parseInt(this.value) / 100;
@@ -332,8 +334,9 @@
             border: 1px solid #555;
             border-radius: 3px;
             background-color: #333;
-            color: white;
+            color: #fff;
             font-size: 12px;
+            text-align: center;
         `;
         intervalInput.onchange = function () {
             const newInterval = parseInt(this.value);
@@ -418,10 +421,16 @@
         const intervalMinInput = document.createElement('input');
         intervalMinInput.type = 'number';
         intervalMinInput.value = config.intervalRandomMin;
-        intervalMinInput.style.width = '60px';
-        intervalMinInput.onchange = function() {
-            config.intervalRandomMin = parseInt(this.value) || 0;
-        };
+        intervalMinInput.style.cssText = `
+            width: 60px;
+            padding: 3px;
+            border: 1px solid #555;
+            border-radius: 3px;
+            background-color: #333;
+            color: #fff;
+            font-size: 12px;
+            text-align: center;
+        `;
         intervalMinLabel.appendChild(intervalMinInput);
         advancedContainer.appendChild(intervalMinLabel);
 
@@ -432,10 +441,16 @@
         const intervalMaxInput = document.createElement('input');
         intervalMaxInput.type = 'number';
         intervalMaxInput.value = config.intervalRandomMax;
-        intervalMaxInput.style.width = '60px';
-        intervalMaxInput.onchange = function() {
-            config.intervalRandomMax = parseInt(this.value) || 0;
-        };
+        intervalMaxInput.style.cssText = `
+            width: 60px;
+            padding: 3px;
+            border: 1px solid #555;
+            border-radius: 3px;
+            background-color: #333;
+            color: #fff;
+            font-size: 12px;
+            text-align: center;
+        `;
         intervalMaxLabel.appendChild(intervalMaxInput);
         advancedContainer.appendChild(intervalMaxLabel);
 
@@ -446,16 +461,23 @@
         const offsetInput = document.createElement('input');
         offsetInput.type = 'number';
         offsetInput.value = config.maxClickOffset;
-        offsetInput.style.width = '60px';
-        offsetInput.onchange = function() {
-            config.maxClickOffset = parseInt(this.value) || 0;
-        };
+        offsetInput.style.cssText = `
+            width: 60px;
+            padding: 3px;
+            border: 1px solid #555;
+            border-radius: 3px;
+            background-color: #333;
+            color: #fff;
+            font-size: 12px;
+            text-align: center;
+        `;
         offsetLabel.appendChild(offsetInput);
         advancedContainer.appendChild(offsetLabel);
 
         contentContainer.appendChild(advancedContainer);
         // --- Конец расширенных настроек ---
 
+        // Связь с автором — выносим в самый низ панели
         const contactInfo = document.createElement('div');
         contactInfo.style.cssText = `
             margin-top: 10px;
@@ -465,7 +487,7 @@
             border-top: 1px solid #555;
             padding-top: 10px;
         `;
-        contactInfo.innerHTML = 'Связь: <a href="https://t.me/nod3r" target="_blank" style="color: #3897f0; text-decoration: none;">@nod3r</a>';
+        contactInfo.innerHTML = 'Связь с автором: <a href="https://t.me/nod3r" target="_blank" style="color: #3897f0; text-decoration: none;">@nod3r</a>';
         contentContainer.appendChild(contactInfo);
 
         panel.appendChild(contentContainer);
