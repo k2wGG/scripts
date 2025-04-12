@@ -6,6 +6,8 @@
 // @match        https://www.geturanium.io/*
 // @grant        none
 // @run-at       document-end
+// @updateURL    https://raw.githubusercontent.com/k2wGG/scripts/refs/heads/main/uranus
+// @downloadURL  https://raw.githubusercontent.com/k2wGG/scripts/refs/heads/main/uranus
 // ==/UserScript==
 
 (function () {
