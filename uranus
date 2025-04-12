@@ -9,13 +9,13 @@
     const config = {
         clickInterval: 150,           // Базовый интервал между кликами (мс)
         wallCount: 10,                // Количество "стен" (вертикальных линий) на конвейере
-        wallRange: { start: 10, end: 90 }, // Диапазон позиций стен в процентах (от 10% до 90% ширины)
+        wallRange: { start: 10, end: 90 }, // Диапазон позиций стен (в процентах от ширины)
         wallPositions: [],
         pointsPerWall: 10,            // Количество точек клика на каждой "стене"
         gridMode: true,               // Режим «сетка» распределения точек
-        debug: true,                  // Отладочные сообщения
-        isRunning: true,              // Флаг, включён ли кликер
-        hitCount: 0,                  // Общее количество "попаданий"
+        debug: true,                  // Отладочные сообщения в консоли
+        isRunning: true,              // Флаг включённого кликера
+        hitCount: 0,                  // Общее количество кликов (попаданий)
         recentHits: [],               // Массив для подсчёта кликов за последние 10 секунд
         pointOpacity: 0.5,            // Прозрачность точек клика (0–1)
         panelCollapsed: false,        // Флаг свёрнутости панели управления
@@ -24,7 +24,8 @@
         randomizeInterval: true,      // Использовать случайное изменение интервала между циклами кликов
         intervalRandomMin: -20,       // Минимальное изменение интервала (мс)
         intervalRandomMax: 20,        // Максимальное изменение интервала (мс)
-        maxClickOffset: 5             // Максимальное смещение координат клика (px)
+        maxClickOffset: 5,            // Максимальное смещение координат клика (px)
+        animateCursor: true           // Использовать имитацию движения виртуального курсора
     };
 
     // Вычисляем равномерно позиции стен в указанном диапазоне
@@ -46,31 +47,86 @@
         return document.querySelector('.conveyor-track.ConveyorBelt_enhancedTrack__vMgYX');
     }
 
-    // Отправляет событие клика по элементу с визуальным эффектом, добавляя случайное смещение
+    // Функция имитации движения фейкового курсора
+    function animateFakeCursorTo(targetX, targetY, duration = 500) {
+        let fakeCursor = document.getElementById('fake-cursor');
+        if (!fakeCursor) {
+            fakeCursor = document.createElement('div');
+            fakeCursor.id = 'fake-cursor';
+            fakeCursor.style.position = 'fixed';
+            fakeCursor.style.width = '15px';
+            fakeCursor.style.height = '15px';
+            fakeCursor.style.backgroundColor = 'white'; // Можно заменить изображением курсора
+            fakeCursor.style.borderRadius = '50%';
+            fakeCursor.style.zIndex = '100000';
+            fakeCursor.style.pointerEvents = 'none';
+            // Начальное положение – центр экрана
+            fakeCursor.style.left = (window.innerWidth / 2) + 'px';
+            fakeCursor.style.top = (window.innerHeight / 2) + 'px';
+            document.body.appendChild(fakeCursor);
+        }
+        const startX = parseFloat(fakeCursor.style.left);
+        const startY = parseFloat(fakeCursor.style.top);
+        const startTime = performance.now();
+        function animate(time) {
+            const elapsed = time - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            const currentX = startX + (targetX - startX) * progress;
+            const currentY = startY + (targetY - startY) * progress;
+            fakeCursor.style.left = currentX + 'px';
+            fakeCursor.style.top = currentY + 'px';
+            if (progress < 1) {
+                requestAnimationFrame(animate);
+            }
+        }
+        requestAnimationFrame(animate);
+    }
+
+    // Функция отправки кликовых событий с имитацией движения курсора (если включено)
     function safeDispatchClick(element, x, y) {
         if (!element || typeof element.dispatchEvent !== 'function') return false;
-        
         try {
-            showClickEffect(x, y);
-            
-            // Для каждого события вычисляем случайное смещение (от -maxClickOffset до +maxClickOffset)
-            ['mousedown', 'mouseup', 'click'].forEach(eventType => {
-                const randomOffsetX = Math.floor(Math.random() * (config.maxClickOffset * 2 + 1)) - config.maxClickOffset;
-                const randomOffsetY = Math.floor(Math.random() * (config.maxClickOffset * 2 + 1)) - config.maxClickOffset;
-                const event = new MouseEvent(eventType, {
-                    bubbles: true,
-                    cancelable: true,
-                    view: window,
-                    button: 0,
-                    buttons: eventType === 'mousedown' ? 1 : 0,
-                    clientX: x + randomOffsetX,
-                    clientY: y + randomOffsetY,
-                    screenX: x + randomOffsetX,
-                    screenY: y + randomOffsetY
+            if (config.animateCursor) {
+                // Анимируем фейковый курсор к целевым координатам (500 мс)
+                animateFakeCursorTo(x, y, 500);
+                // По завершении анимации (через 500 мс) отправляем кликовые события
+                setTimeout(() => {
+                    ['mousedown', 'mouseup', 'click'].forEach(eventType => {
+                        const randomOffsetX = Math.floor(Math.random() * (config.maxClickOffset * 2 + 1)) - config.maxClickOffset;
+                        const randomOffsetY = Math.floor(Math.random() * (config.maxClickOffset * 2 + 1)) - config.maxClickOffset;
+                        const event = new MouseEvent(eventType, {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window,
+                            button: 0,
+                            buttons: eventType === 'mousedown' ? 1 : 0,
+                            clientX: x + randomOffsetX,
+                            clientY: y + randomOffsetY,
+                            screenX: x + randomOffsetX,
+                            screenY: y + randomOffsetY
+                        });
+                        element.dispatchEvent(event);
+                    });
+                }, 500);
+            } else {
+                // Если имитация движения курсора отключена, отправляем кликовые события сразу
+                ['mousedown', 'mouseup', 'click'].forEach(eventType => {
+                    const randomOffsetX = Math.floor(Math.random() * (config.maxClickOffset * 2 + 1)) - config.maxClickOffset;
+                    const randomOffsetY = Math.floor(Math.random() * (config.maxClickOffset * 2 + 1)) - config.maxClickOffset;
+                    const event = new MouseEvent(eventType, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        button: 0,
+                        buttons: eventType === 'mousedown' ? 1 : 0,
+                        clientX: x + randomOffsetX,
+                        clientY: y + randomOffsetY,
+                        screenX: x + randomOffsetX,
+                        screenY: y + randomOffsetY
+                    });
+                    element.dispatchEvent(event);
                 });
-                element.dispatchEvent(event);
-            });
-            
+            }
             return true;
         } catch (err) {
             console.error('Ошибка при отправке события клика:', err);
@@ -81,7 +137,6 @@
     // Отображает визуальный эффект клика (анимация круга)
     function showClickEffect(x, y) {
         let effect = clickEffects.find(e => !e.active);
-        
         if (!effect) {
             const el = document.createElement('div');
             el.className = 'uranium-click-effect';
@@ -99,29 +154,19 @@
                 transition: transform 0.3s ease-out, opacity 0.3s ease-out;
             `;
             document.body.appendChild(el);
-            
-            effect = {
-                element: el,
-                active: false
-            };
+            effect = { element: el, active: false };
             clickEffects.push(effect);
         }
-        
         effect.active = true;
         effect.element.style.left = `${x}px`;
         effect.element.style.top = `${y}px`;
-        
         setTimeout(() => {
             effect.element.style.opacity = '1';
             effect.element.style.transform = 'translate(-50%, -50%) scale(1)';
-            
             setTimeout(() => {
                 effect.element.style.opacity = '0';
                 effect.element.style.transform = 'translate(-50%, -50%) scale(0.2)';
-                
-                setTimeout(() => {
-                    effect.active = false;
-                }, 300);
+                setTimeout(() => { effect.active = false; }, 300);
             }, 200);
         }, 0);
     }
@@ -131,16 +176,13 @@
         const rect = container.getBoundingClientRect();
         const point = document.createElement('div');
         point.className = 'uranium-click-point';
-        
         const x = rect.left + (rect.width * xPercent / 100);
         const y = rect.top + (rect.height * yPercent / 100);
-        
         let adjustedColor = color;
         if (color.includes('rgba')) {
             adjustedColor = color.replace(/rgba\(([^,]+),([^,]+),([^,]+),[^)]+\)/,
                                         `rgba($1,$2,$3,${config.pointOpacity})`);
         }
-        
         point.style.cssText = `
             position: fixed;
             left: ${x}px;
@@ -156,7 +198,6 @@
             box-shadow: 0 0 3px rgba(0,0,0,0.3);
         `;
         document.body.appendChild(point);
-        
         point.actualX = x;
         point.actualY = y;
         point.xPercent = xPercent;
@@ -164,11 +205,10 @@
         point.color = adjustedColor;
         point.size = size;
         point.hitCount = 0;
-        
         return point;
     }
 
-    // Создаёт панель управления, где можно редактировать основные и расширенные настройки кликера
+    // Создаёт панель управления с настройками кликера, включая возможность включения/отключения имитации движения курсора
     function createControlPanel() {
         const panel = document.createElement('div');
         panel.className = 'uranium-control-panel';
@@ -197,7 +237,6 @@
             align-items: center;
             width: 100%;
         `;
-        
         const title = document.createElement('div');
         title.textContent = 'Уран: Кликер v1.0';
         title.style.fontWeight = 'bold';
@@ -215,7 +254,6 @@
             padding: 0 5px;
             margin-left: 10px;
         `;
-        
         const contentContainer = document.createElement('div');
         contentContainer.className = 'uranium-panel-content';
         contentContainer.style.cssText = `
@@ -226,7 +264,6 @@
             overflow: hidden;
             transition: height 0.3s ease, opacity 0.3s ease;
         `;
-        
         collapseButton.onclick = function () {
             config.panelCollapsed = !config.panelCollapsed;
             if (config.panelCollapsed) {
@@ -245,7 +282,6 @@
                 panel.style.padding = '10px';
             }
         };
-        
         headerContainer.appendChild(collapseButton);
         panel.appendChild(headerContainer);
         
@@ -264,7 +300,6 @@
             config.isRunning = !config.isRunning;
             this.textContent = config.isRunning ? 'Остановить клики' : 'Начать клики';
             this.style.backgroundColor = config.isRunning ? '#ff4444' : '#4CAF50';
-            
             if (config.isRunning) {
                 startClicking();
             } else {
@@ -390,7 +425,6 @@
         advancedHeader.style.marginTop = '10px';
         advancedHeader.style.fontSize = '13px';
         contentContainer.appendChild(advancedHeader);
-
         const advancedContainer = document.createElement('div');
         advancedContainer.style.cssText = `
             border-top: 1px solid #555; 
@@ -400,7 +434,6 @@
             flex-direction: column; 
             gap: 5px;
         `;
-
         // Использовать случайный интервал (checkbox)
         const randomIntervalLabel = document.createElement('label');
         randomIntervalLabel.style.fontSize = '12px';
@@ -413,7 +446,6 @@
         };
         randomIntervalLabel.appendChild(randomIntervalCheckbox);
         advancedContainer.appendChild(randomIntervalLabel);
-
         // Минимальное изменение интервала
         const intervalMinLabel = document.createElement('label');
         intervalMinLabel.style.fontSize = '12px';
@@ -433,7 +465,6 @@
         `;
         intervalMinLabel.appendChild(intervalMinInput);
         advancedContainer.appendChild(intervalMinLabel);
-
         // Максимальное изменение интервала
         const intervalMaxLabel = document.createElement('label');
         intervalMaxLabel.style.fontSize = '12px';
@@ -453,7 +484,6 @@
         `;
         intervalMaxLabel.appendChild(intervalMaxInput);
         advancedContainer.appendChild(intervalMaxLabel);
-
         // Максимальное смещение клика
         const offsetLabel = document.createElement('label');
         offsetLabel.style.fontSize = '12px';
@@ -473,10 +503,23 @@
         `;
         offsetLabel.appendChild(offsetInput);
         advancedContainer.appendChild(offsetLabel);
-
+        
+        // --- Новая настройка: включение/отключение имитации движения курсора ---
+        const animateCursorLabel = document.createElement('label');
+        animateCursorLabel.style.fontSize = '12px';
+        animateCursorLabel.textContent = 'Имитация движения курсора: ';
+        const animateCursorCheckbox = document.createElement('input');
+        animateCursorCheckbox.type = 'checkbox';
+        animateCursorCheckbox.checked = config.animateCursor;
+        animateCursorCheckbox.onchange = function() {
+            config.animateCursor = this.checked;
+        };
+        animateCursorLabel.appendChild(animateCursorCheckbox);
+        advancedContainer.appendChild(animateCursorLabel);
+        
         contentContainer.appendChild(advancedContainer);
         // --- Конец расширенных настроек ---
-
+        
         // Связь с автором — выносим в самый низ панели
         const contactInfo = document.createElement('div');
         contactInfo.style.cssText = `
@@ -489,10 +532,9 @@
         `;
         contactInfo.innerHTML = 'Связь с автором: <a href="https://t.me/nod3r" target="_blank" style="color: #3897f0; text-decoration: none;">@nod3r</a>';
         contentContainer.appendChild(contactInfo);
-
+        
         panel.appendChild(contentContainer);
         document.body.appendChild(panel);
-        
         return panel;
     }
 
@@ -500,11 +542,9 @@
     function updateStats() {
         const totalHitsElement = document.getElementById('uranium-total-hits');
         const recentHitsElement = document.getElementById('uranium-recent-hits');
-        
         if (totalHitsElement) {
             totalHitsElement.textContent = `Всего попаданий: ${config.hitCount}`;
         }
-        
         if (recentHitsElement) {
             const now = Date.now();
             config.recentHits = config.recentHits.filter(time => now - time < 10000);
@@ -517,12 +557,10 @@
     function highlightPoint(point) {
         point.style.transform = `translate(-50%, -50%) scale(1.5)`;
         point.style.backgroundColor = 'rgba(255, 255, 0, 0.9)';
-        
         setTimeout(() => {
             point.style.transform = 'translate(-50%, -50%) scale(1)';
             point.style.backgroundColor = point.color;
         }, 150);
-        
         point.hitCount++;
     }
 
@@ -554,20 +592,16 @@
             setTimeout(initClickGrid, 1000);
             return;
         }
-        
         // Удаляем ранее созданные точки
         clickPoints.forEach(point => point.remove());
         clickPoints.length = 0;
-        
         if (config.gridMode) {
             const xPositions = config.wallPositions;
             const yPositions = [];
-            
             for (let i = 0; i < config.pointsPerWall; i++) {
                 const yPercent = 5 + (90 * i / (config.pointsPerWall - 1));
                 yPositions.push(Number(yPercent.toFixed(1)));
             }
-            
             const colors = [
                 'rgba(255, 0, 0, 0.7)',
                 'rgba(0, 0, 255, 0.7)',
@@ -580,11 +614,9 @@
                 'rgba(0, 255, 255, 0.7)',
                 'rgba(128, 0, 0, 0.7)'
             ];
-            
             for (let xIndex = 0; xIndex < xPositions.length; xIndex++) {
                 const xPercent = xPositions[xIndex];
                 const color = colors[xIndex % colors.length];
-                
                 for (let yIndex = 0; yIndex < yPositions.length; yIndex++) {
                     const yPercent = yPositions[yIndex];
                     const size = 4;
@@ -592,7 +624,6 @@
                     clickPoints.push(point);
                 }
             }
-            
             if (config.debug) {
                 console.log(`Создано ${clickPoints.length} точек клика для полного покрытия сетки`);
             }
@@ -710,6 +741,8 @@
     // Основная функция инициализации кликера
     function initializeClicker() {
         console.log('Инициализация Uranium: Кликер v1.0...');
+        // Скрываем системный курсор, чтобы отображался только виртуальный
+        document.body.style.cursor = 'none';
         initClickGrid();
         createControlPanel();
         window.addEventListener('resize', handleViewportChange);
