@@ -1,5 +1,14 @@
 #!/bin/bash
 
+# Подгружаем окружение Rust (если установлено)
+[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+
+SCRIPT_NAME="BITZ-CLI"               # Имя скрипта (должно совпадать со строкой в versions.txt)
+SCRIPT_VERSION="1.0.0"            # Текущая локальная версия
+VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
+SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/BITZ-CLI.sh"
+
+
 # Цвета
 GREEN='\033[0;32m'
 NC='\033[0m'
@@ -77,35 +86,69 @@ function show_private_key() {
 
 function install_bitz() {
   header
+  if ! command -v cargo &> /dev/null; then
+    echo "❌ Cargo не найден. Убедись, что Rust установлен (пункт 1)."
+    pause
+    return
+  fi
+
   echo "Установка BITZ..."
-  cargo install bitz
+  cargo install bitz --force
   pause
 }
 
 function start_miner() {
   header
+  if ! command -v bitz &> /dev/null; then
+    echo "❌ Команда 'bitz' не найдена. Сначала установите BITZ (пункт 4)."
+    pause
+    return
+  fi
+
   read -rp "Сколько ядер использовать (например, 4): " CORES
-  screen -dmS bitz bash -c "bitz collect --cores $CORES"
-  echo "Майнинг запущен в screen-сессии 'bitz'."
+
+  # Удалим предыдущий лог
+  rm -f ~/bitz.log
+
+  # Запускаем miner с логированием
+  screen -dmS bitz bash -c "bitz collect --cores $CORES | tee -a ~/bitz.log"
+
+  sleep 2
+  screen -ls | grep -q bitz
+  if [[ $? -eq 0 ]]; then
+    echo "✅ Майнинг запущен в screen-сессии 'bitz'."
+    echo "📄 Лог: ~/bitz.log"
+  else
+    echo "⚠️ Что-то пошло не так — screen не запустился."
+    echo "Попробуй вручную: screen -S bitz, затем bitz collect"
+  fi
   pause
 }
 
 function stop_miner() {
   header
-  screen -XS bitz quit
-  echo "Майнинг остановлен."
+  screen -XS bitz quit 2>/dev/null
+  echo "🛑 Майнинг остановлен (если был активен)."
   pause
 }
 
 function check_account() {
   header
-  bitz account
+  if command -v bitz &> /dev/null; then
+    bitz account
+  else
+    echo "Команда 'bitz' не найдена."
+  fi
   pause
 }
 
 function claim_tokens() {
   header
-  bitz claim
+  if command -v bitz &> /dev/null; then
+    bitz claim
+  else
+    echo "Команда 'bitz' не найдена."
+  fi
   pause
 }
 
@@ -133,7 +176,7 @@ function show_menu() {
       6) stop_miner ;;
       7) check_account ;;
       8) claim_tokens ;;
-      9) echo "Выход..." && break ;;
+      9) echo "👋 Выход..." && break ;;
       *) echo "Неверный выбор." && sleep 1 ;;
     esac
   done
