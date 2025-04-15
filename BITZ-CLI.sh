@@ -8,7 +8,6 @@ SCRIPT_VERSION="1.0.0"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/BITZ-CLI.sh"
 
-# Цвета
 GREEN='\033[0;32m'
 NC='\033[0m'
 
@@ -36,7 +35,7 @@ function header() {
   if [[ -n "$remote_version" ]]; then
     if [[ "$remote_version" != "$SCRIPT_VERSION" ]]; then
       echo -e "⚠️ Доступна новая версия: ${remote_version}"
-      echo -e "📅 Обновить: wget -O BITZ-CLI.sh $SCRIPT_FILE_URL && chmod +x BITZ-CLI.sh"
+      echo -e "📥 Обновить: wget -O BITZ-CLI.sh $SCRIPT_FILE_URL && chmod +x BITZ-CLI.sh"
     else
       echo -e "✅ Установлена последняя версия."
     fi
@@ -100,7 +99,7 @@ function create_wallet() {
 
 function show_private_key() {
   header
-  echo "Приватный ключ (copy array):"
+  echo "Приватный ключ (копируй массив):"
   cat ~/.config/solana/id.json
   pause
 }
@@ -108,10 +107,11 @@ function show_private_key() {
 function install_bitz() {
   header
   if ! command -v cargo &> /dev/null; then
-    echo "❌ Cargo не найден. Rust не установлен."
+    echo "❌ Cargo не найден. Убедись, что Rust установлен (пункт 1)."
     pause
     return
   fi
+
   echo "Установка BITZ..."
   cargo install bitz --force
   pause
@@ -119,23 +119,50 @@ function install_bitz() {
 
 function start_miner() {
   header
+
   if ! command -v bitz &> /dev/null; then
-    echo "❌ Команда 'bitz' не найдена."
+    echo "❌ Команда 'bitz' не найдена. Сначала установите BITZ (пункт 4)."
     pause
     return
   fi
-  read -rp "Сколько ядер использовать (1-8): " CORES
-  rm -f ~/bitz.log
-  screen -dmS bitz bash -c "bitz collect --cores $CORES | tee -a ~/bitz.log"
+
+  read -rp "Сколько ядер использовать (например, 4): " CORES
+  if ! [[ "$CORES" =~ ^[0-9]+$ ]]; then
+    echo "❌ Введите целое число (например, 4)."
+    pause
+    return
+  fi
+
+  LOG_PATH="$HOME/bitz.log"
+  rm -f "$LOG_PATH"
+
+  echo "▶️ Запуск майнинга в screen-сессии 'bitz'..."
+  screen -dmS bitz bash -c "bitz collect --cores $CORES 2>&1 | tee -a '$LOG_PATH'"
+
   sleep 2
-  screen -ls | grep -q bitz && echo "✅ Майнинг запущен." || echo "⚠️ Сессия screen не создана."
+
+  if screen -list | grep -q "\.bitz"; then
+    echo "✅ Майнинг запущен."
+    echo "📄 Лог: $LOG_PATH"
+  else
+    echo "❌ Screen-сессия 'bitz' не найдена. Возможные причины:"
+    echo "   • Команда 'bitz collect' завершилась с ошибкой"
+    echo "   • Ошибка в конфигурации RPC или кошельке"
+    echo "   • Не хватает зависимостей или сети"
+    echo "📄 Проверь лог: $LOG_PATH"
+  fi
+
   pause
 }
 
 function stop_miner() {
   header
-  screen -XS bitz quit 2>/dev/null
-  echo "🛑 Майнинг остановлен."
+  if screen -list | grep -q "\.bitz"; then
+    screen -XS bitz quit
+    echo "🛑 Майнинг остановлен."
+  else
+    echo "ℹ️ Нет активной screen-сессии 'bitz'. Майнинг уже остановлен или не запускался."
+  fi
   pause
 }
 
@@ -172,7 +199,7 @@ function show_menu() {
   while true; do
     header
     echo "1. Установить зависимости"
-    echo "2. Создать CLI-кошёлек"
+    echo "2. Создать CLI-кошелёк"
     echo "3. Показать приватный ключ"
     echo "4. Установить BITZ"
     echo "5. Запустить майнинг"
@@ -181,7 +208,7 @@ function show_menu() {
     echo "8. Вывести токены"
     echo "9. Выйти"
     echo "10. 🔧 Удалить всё (ноду, Rust, Solana, screen)"
-    read -rp "🔎 Введите номер: " choice
+    read -rp "👉 Введите номер: " choice
 
     case $choice in
       1) install_dependencies ;;
