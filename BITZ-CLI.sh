@@ -31,6 +31,22 @@ function header() {
   echo -e "${GREEN}"
   show_logo
   echo -e "${NC}"
+  echo -e "Версия скрипта: ${SCRIPT_VERSION}"
+
+  # Проверка актуальности
+  remote_version=$(curl -s "$VERSIONS_FILE_URL" | grep "^${SCRIPT_NAME}=" | cut -d "=" -f2)
+  if [[ -n "$remote_version" ]]; then
+    if [[ "$remote_version" != "$SCRIPT_VERSION" ]]; then
+      echo -e "⚠️ Доступна новая версия: ${remote_version}"
+      echo -e "📥 Обновить: wget -O BITZ-CLI.sh $SCRIPT_FILE_URL && chmod +x BITZ-CLI.sh"
+    else
+      echo -e "✅ Установлена последняя версия."
+    fi
+  else
+    echo -e "⚠️ Не удалось проверить обновления."
+  fi
+
+  echo ""
 }
 
 function pause() {
