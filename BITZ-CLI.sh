@@ -33,12 +33,32 @@ function install_dependencies() {
   echo "Установка зависимостей..."
   sudo apt update && sudo apt upgrade -y
   sudo apt install screen curl nano build-essential pkg-config libssl-dev clang -y
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-  source "$HOME/.cargo/env"
-  sh -c "$(curl -sSfL https://release.solana.com/v1.18.2/install)"
-  echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
-  source ~/.bashrc
+
+  # Установка Rust
+  if ! command -v cargo &> /dev/null; then
+    echo "Устанавливаем Rust..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source "$HOME/.cargo/env"
+    echo 'source "$HOME/.cargo/env"' >> ~/.bashrc
+  else
+    source "$HOME/.cargo/env"
+  fi
+
+  # Установка Solana CLI
+  if ! command -v solana &> /dev/null; then
+    echo "Устанавливаем Solana CLI..."
+    sh -c "$(curl -sSfL https://release.solana.com/v1.18.2/install)"
+    export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+    echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc
+  else
+    export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+  fi
+
+  # Настройка RPC
   solana config set --url https://eclipse.helius-rpc.com
+
+  echo -e "\n✅ Все зависимости установлены!"
   pause
 }
 
