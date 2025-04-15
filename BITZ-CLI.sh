@@ -3,11 +3,10 @@
 # Подгружаем окружение Rust (если установлено)
 [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 
-SCRIPT_NAME="BITZ-CLI"               # Имя скрипта (должно совпадать со строкой в versions.txt)
-SCRIPT_VERSION="1.0.0"            # Текущая локальная версия
+SCRIPT_NAME="BITZ-CLI"
+SCRIPT_VERSION="1.0.0"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/BITZ-CLI.sh"
-
 
 # Цвета
 GREEN='\033[0;32m'
@@ -33,19 +32,17 @@ function header() {
   echo -e "${NC}"
   echo -e "Версия скрипта: ${SCRIPT_VERSION}"
 
-  # Проверка актуальности
   remote_version=$(curl -s "$VERSIONS_FILE_URL" | grep "^${SCRIPT_NAME}=" | cut -d "=" -f2)
   if [[ -n "$remote_version" ]]; then
     if [[ "$remote_version" != "$SCRIPT_VERSION" ]]; then
       echo -e "⚠️ Доступна новая версия: ${remote_version}"
-      echo -e "📥 Обновить: wget -O BITZ-CLI.sh $SCRIPT_FILE_URL && chmod +x BITZ-CLI.sh"
+      echo -e "📅 Обновить: wget -O BITZ-CLI.sh $SCRIPT_FILE_URL && chmod +x BITZ-CLI.sh"
     else
       echo -e "✅ Установлена последняя версия."
     fi
   else
     echo -e "⚠️ Не удалось проверить обновления."
   fi
-
   echo ""
 }
 
@@ -59,7 +56,6 @@ function install_dependencies() {
   sudo apt update && sudo apt upgrade -y
   sudo apt install screen curl nano build-essential pkg-config libssl-dev clang -y
 
-  # Установка Rust
   if ! command -v cargo &> /dev/null; then
     echo "Устанавливаем Rust..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
@@ -69,7 +65,6 @@ function install_dependencies() {
     source "$HOME/.cargo/env"
   fi
 
-  # Установка Solana CLI
   if ! command -v solana &> /dev/null; then
     echo "Устанавливаем Solana CLI..."
     sh -c "$(curl -sSfL https://release.solana.com/v1.18.2/install)"
@@ -80,22 +75,32 @@ function install_dependencies() {
     export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
   fi
 
-  # Настройка RPC
   solana config set --url https://eclipse.helius-rpc.com
-
   echo -e "\n✅ Все зависимости установлены!"
   pause
 }
 
 function create_wallet() {
   header
-  solana-keygen new
+  if [ -f "$HOME/.config/solana/id.json" ]; then
+    echo "⚠️ Кошелёк уже существует: $HOME/.config/solana/id.json"
+    read -rp "Перезаписать? (yes/no): " confirm
+    if [[ "$confirm" == "yes" ]]; then
+      solana-keygen new --force
+    else
+      echo "❌ Создание кошелька отменено."
+      pause
+      return
+    fi
+  else
+    solana-keygen new
+  fi
   pause
 }
 
 function show_private_key() {
   header
-  echo "Приватный ключ (копируй массив):"
+  echo "Приватный ключ (copy array):"
   cat ~/.config/solana/id.json
   pause
 }
@@ -103,11 +108,10 @@ function show_private_key() {
 function install_bitz() {
   header
   if ! command -v cargo &> /dev/null; then
-    echo "❌ Cargo не найден. Убедись, что Rust установлен (пункт 1)."
+    echo "❌ Cargo не найден. Rust не установлен."
     pause
     return
   fi
-
   echo "Установка BITZ..."
   cargo install bitz --force
   pause
@@ -116,64 +120,59 @@ function install_bitz() {
 function start_miner() {
   header
   if ! command -v bitz &> /dev/null; then
-    echo "❌ Команда 'bitz' не найдена. Сначала установите BITZ (пункт 4)."
+    echo "❌ Команда 'bitz' не найдена."
     pause
     return
   fi
-
-  read -rp "Сколько ядер использовать (например, 4): " CORES
-
-  # Удалим предыдущий лог
+  read -rp "Сколько ядер использовать (1-8): " CORES
   rm -f ~/bitz.log
-
-  # Запускаем miner с логированием
   screen -dmS bitz bash -c "bitz collect --cores $CORES | tee -a ~/bitz.log"
-
   sleep 2
-  screen -ls | grep -q bitz
-  if [[ $? -eq 0 ]]; then
-    echo "✅ Майнинг запущен в screen-сессии 'bitz'."
-    echo "📄 Лог: ~/bitz.log"
-  else
-    echo "⚠️ Что-то пошло не так — screen не запустился."
-    echo "Попробуй вручную: screen -S bitz, затем bitz collect"
-  fi
+  screen -ls | grep -q bitz && echo "✅ Майнинг запущен." || echo "⚠️ Сессия screen не создана."
   pause
 }
 
 function stop_miner() {
   header
   screen -XS bitz quit 2>/dev/null
-  echo "🛑 Майнинг остановлен (если был активен)."
+  echo "🛑 Майнинг остановлен."
   pause
 }
 
 function check_account() {
   header
-  if command -v bitz &> /dev/null; then
-    bitz account
-  else
-    echo "Команда 'bitz' не найдена."
-  fi
+  command -v bitz &> /dev/null && bitz account || echo "'bitz' не найден."
   pause
 }
 
 function claim_tokens() {
   header
-  if command -v bitz &> /dev/null; then
-    bitz claim
-  else
-    echo "Команда 'bitz' не найдена."
-  fi
+  command -v bitz &> /dev/null && bitz claim || echo "'bitz' не найден."
+  pause
+}
+
+function uninstall_node() {
+  header
+  echo "⚠️ Удаление BITZ, Rust, Solana, screen..."
+  read -rp "Удалить всё? (yes/no): " confirm
+  [[ "$confirm" != "yes" ]] && echo "❌ Отменено." && pause && return
+
+  cargo uninstall bitz 2>/dev/null
+  rm -rf ~/.cargo ~/.rustup
+  rm -rf ~/.local/share/solana ~/.config/solana
+  sudo apt remove --purge screen -y
+  sudo apt autoremove -y
+  rm -f ~/bitz.log
+
+  echo "✅ Всё удалено."
   pause
 }
 
 function show_menu() {
   while true; do
     header
-    echo "Выберите действие:"
     echo "1. Установить зависимости"
-    echo "2. Создать CLI-кошелёк"
+    echo "2. Создать CLI-кошёлек"
     echo "3. Показать приватный ключ"
     echo "4. Установить BITZ"
     echo "5. Запустить майнинг"
@@ -181,7 +180,8 @@ function show_menu() {
     echo "7. Проверить баланс"
     echo "8. Вывести токены"
     echo "9. Выйти"
-    read -rp "👉 Введите номер: " choice
+    echo "10. 🔧 Удалить всё (ноду, Rust, Solana, screen)"
+    read -rp "🔎 Введите номер: " choice
 
     case $choice in
       1) install_dependencies ;;
@@ -193,7 +193,8 @@ function show_menu() {
       7) check_account ;;
       8) claim_tokens ;;
       9) echo "👋 Выход..." && break ;;
-      *) echo "Неверный выбор." && sleep 1 ;;
+     10) uninstall_node ;;
+      *) echo "❌ Неверный выбор." && sleep 1 ;;
     esac
   done
 }
