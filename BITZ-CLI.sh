@@ -4,7 +4,7 @@
 [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 
 SCRIPT_NAME="BITZ-CLI"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.1.1"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/BITZ-CLI.sh"
 
@@ -19,7 +19,7 @@ RPC_URL="https://eclipse.helius-rpc.com"
 solana config set --url "$RPC_URL"
 
 # Параметры комиссии по умолчанию
-PRIORITY_FEE=50000      # микролампортов за 1 CU
+PRIORITY_FEE=0      # микролампортов за 1 CU
 WAIT_ON_FEE=true        # ждать ли снижения базовой платы?
 MIN_FEE_TARGET=6000     # лампорт/подпись
 
@@ -147,7 +147,7 @@ stop_miner() {
   header
   if screen -list | grep -q "\.bitz"; then
     screen -XS bitz quit
-    echo "🛑 Майнинг остановлен."
+    echo "🛑 Майнер остановлен."
   else
     echo "ℹ️ Майнер не запущен."
   fi
@@ -187,8 +187,16 @@ wait_for_low_fee() {
 
 show_fee_info() {
   header
+  echo "💰 Текущий баланс (bitz account):"
+  bitz $(build_fee_flags) account
+  echo
   fee=$(get_current_fee)
-  echo "Lamports per signature: $fee"
+  if [[ -z "$fee" ]]; then
+    fee=$(solana fees --url https://api.mainnet-beta.solana.com | awk '/Lamports per signature/ {print $4}')
+    echo "🔍 Lamports per signature (fallback): $fee"
+  else
+    echo "🔍 Lamports per signature (helius): $fee"
+  fi
   pause
 }
 
