@@ -20,8 +20,8 @@ solana config set --url "$RPC_URL"
 
 # Параметры комиссии по умолчанию
 PRIORITY_FEE=0      # микролампортов за 1 CU
-WAIT_ON_FEE=true        # ждать ли снижения базовой платы?
-MIN_FEE_TARGET=6000     # лампорт/подпись
+WAIT_ON_FEE=true    # ждать ли снижения базовой платы?
+MIN_FEE_TARGET=6000 # лампорт/подпись
 
 # Если есть сохранённые настройки — загружаем
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -41,7 +41,7 @@ show_logo() {
 | . ` |/ _ \ / _` |    \ \ '__|
 | |\  | (_) | (_| |.___/ / |   
 \_| \_/\___/ \__,_|\____/|_|   
-                               
+                                
 BITZ CLI Node Manager — автоматизация майнинга
 EOF
 }
@@ -160,19 +160,26 @@ check_account() {
   pause
 }
 
-# Получаем базовую плату через Helius, иначе публичный mainnet-beta
+# Обновлённая get_current_fee с обработкой ошибок
 get_current_fee() {
-  hb=$(curl -s -X POST -H "Content-Type: application/json" \
+  # getLatestBlockhash
+  resp=$(curl -s -X POST -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","id":1,"method":"getLatestBlockhash","params":[{"commitment":"confirmed"}]}' \
-    "$RPC_URL" | jq -r '.result.value.blockhash // empty')
-  if [[ -n $hb ]]; then
-    curl -s -X POST -H "Content-Type: application/json" \
-      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getFeeCalculatorForBlockhash\",\"params\":[\"$hb\",{\"commitment\":\"confirmed\"}]}" \
-      "$RPC_URL" | jq -r '.result.value.feeCalculator.lamportsPerSignature // empty'
-  else
-    solana fees --url https://api.mainnet-beta.solana.com \
-      | awk '/Lamports per signature/ {print $4}'
+    "$RPC_URL")
+  if echo "$resp" | jq -e '.error' &>/dev/null; then
+    return
   fi
+  hb=$(echo "$resp" | jq -r '.result.value.blockhash // empty')
+  [[ -z $hb ]] && return
+
+  # getFeeCalculatorForBlockhash
+  resp2=$(curl -s -X POST -H "Content-Type: application/json" \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getFeeCalculatorForBlockhash\",\"params\":[\"$hb\",{\"commitment\":\"confirmed\"}]}" \
+    "$RPC_URL")
+  if echo "$resp2" | jq -e '.error' &>/dev/null; then
+    return
+  fi
+  echo "$resp2" | jq -r '.result.value.feeCalculator.lamportsPerSignature // empty'
 }
 
 wait_for_low_fee() {
@@ -191,7 +198,7 @@ show_fee_info() {
   bitz $(build_fee_flags) account
   echo
   fee=$(get_current_fee)
-  if [[ -z "$fee" ]]; then
+  if [[ -z $fee ]]; then
     fee=$(solana fees --url https://api.mainnet-beta.solana.com | awk '/Lamports per signature/ {print $4}')
     echo "🔍 Lamports per signature (fallback): $fee"
   else
@@ -205,7 +212,6 @@ set_fee_settings() {
   read -rp "PRIORITY_FEE (микроламп/CU) [$PRIORITY_FEE]: " x && [[ $x ]] && PRIORITY_FEE=$x
   read -rp "WAIT_ON_FEE (true/false) [$WAIT_ON_FEE]: " x && [[ $x ]] && WAIT_ON_FEE=$x
   read -rp "MIN_FEE_TARGET (lamports/signature) [$MIN_FEE_TARGET]: " x && [[ $x ]] && MIN_FEE_TARGET=$x
-  # Сохраняем настройки
   cat > "$CONFIG_FILE" <<EOF
 PRIORITY_FEE=$PRIORITY_FEE
 WAIT_ON_FEE=$WAIT_ON_FEE
@@ -263,9 +269,9 @@ show_menu() {
       7) check_account       ;;
       8) claim_tokens        ;;
       9) show_fee_info       ;;
-      10) set_fee_settings   ;;
-      11) uninstall_node     ;;
-      12) exit 0             ;;
+      10) set_fee_settings    ;;
+      11) uninstall_node      ;;
+      12) exit 0              ;;
       *) echo "❌ Неверный выбор." && sleep 1 ;;
     esac
   done
