@@ -4,7 +4,7 @@
 [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 
 SCRIPT_NAME="BITZ-CLI"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.1.1"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/BITZ-CLI.sh"
 
@@ -21,7 +21,7 @@ MIN_FEE_TARGET=7000
 # Динамический расчёт цены (true/false)
 DYNAMIC_FEE=false
 # RPC для динамического расчёта (если DYNAMIC_FEE=true)
-DYNAMIC_FEE_URL="https://eclipse.helius-rpc.com"
+DYNAMIC_FEE_URL="https://api.mainnet-beta.solana.com"
 
 # Формируем флаги bitz для комиссии
 build_fee_flags() {
