@@ -41,7 +41,7 @@ show_logo() {
 | . ` |/ _ \ / _` |    \ \ '__|
 | |\  | (_) | (_| |.___/ / |   
 \_| \_/\___/ \__,_|\____/|_|   
-                                
+                               
 BITZ CLI Node Manager — автоматизация майнинга
 EOF
 }
@@ -160,26 +160,19 @@ check_account() {
   pause
 }
 
-# Обновлённая get_current_fee с обработкой ошибок
+# Получаем базовую плату через Helius, иначе публичный mainnet-beta
 get_current_fee() {
-  # getLatestBlockhash
-  resp=$(curl -s -X POST -H "Content-Type: application/json" \
+  hb=$(curl -s -X POST -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","id":1,"method":"getLatestBlockhash","params":[{"commitment":"confirmed"}]}' \
-    "$RPC_URL")
-  if echo "$resp" | jq -e '.error' &>/dev/null; then
-    return
+    "$RPC_URL" | jq -r '.result.value.blockhash // empty')
+  if [[ -n $hb ]]; then
+    curl -s -X POST -H "Content-Type: application/json" \
+      -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getFeeCalculatorForBlockhash\",\"params\":[\"$hb\",{\"commitment\":\"confirmed\"}]}" \
+      "$RPC_URL" | jq -r '.result.value.feeCalculator.lamportsPerSignature // empty'
+  else
+    solana fees --url https://api.mainnet-beta.solana.com \
+      | awk '/Lamports per signature/ {print $4}'
   fi
-  hb=$(echo "$resp" | jq -r '.result.value.blockhash // empty')
-  [[ -z $hb ]] && return
-
-  # getFeeCalculatorForBlockhash
-  resp2=$(curl -s -X POST -H "Content-Type: application/json" \
-    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getFeeCalculatorForBlockhash\",\"params\":[\"$hb\",{\"commitment\":\"confirmed\"}]}" \
-    "$RPC_URL")
-  if echo "$resp2" | jq -e '.error' &>/dev/null; then
-    return
-  fi
-  echo "$resp2" | jq -r '.result.value.feeCalculator.lamportsPerSignature // empty'
 }
 
 wait_for_low_fee() {
@@ -192,20 +185,7 @@ wait_for_low_fee() {
   done
 }
 
-show_fee_info() {
-  header
-  echo "💰 Текущий баланс (bitz account):"
-  bitz $(build_fee_flags) account
-  echo
-  fee=$(get_current_fee)
-  if [[ -z $fee ]]; then
-    fee=$(solana fees --url https://api.mainnet-beta.solana.com | awk '/Lamports per signature/ {print $4}')
-    echo "🔍 Lamports per signature (fallback): $fee"
-  else
-    echo "🔍 Lamports per signature (helius): $fee"
-  fi
-  pause
-}
+# Убрали пункт «Показать комиссию»
 
 set_fee_settings() {
   header
@@ -254,10 +234,9 @@ show_menu() {
     echo "6) Остановить майнинг"
     echo "7) Проверить баланс"
     echo "8) Вывести токены (claim)"
-    echo "9) Показать комиссию"
-    echo "10) Настройки комиссии"
-    echo "11) Удалить всё"
-    echo "12) Выйти"
+    echo "9) Настройки комиссии"
+    echo "10) Удалить всё"
+    echo "11) Выйти"
     read -rp "👉 Выбор: " choice
     case $choice in
       1) install_dependencies ;;
@@ -268,10 +247,9 @@ show_menu() {
       6) stop_miner          ;;
       7) check_account       ;;
       8) claim_tokens        ;;
-      9) show_fee_info       ;;
-      10) set_fee_settings    ;;
-      11) uninstall_node      ;;
-      12) exit 0              ;;
+      9) set_fee_settings    ;;
+      10) uninstall_node     ;;
+      11) exit 0             ;;
       *) echo "❌ Неверный выбор." && sleep 1 ;;
     esac
   done
