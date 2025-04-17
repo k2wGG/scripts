@@ -4,7 +4,7 @@
 [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 
 SCRIPT_NAME="BITZ-CLI"
-SCRIPT_VERSION="1.1.2"
+SCRIPT_VERSION="1.1.0"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/BITZ-CLI.sh"
 
