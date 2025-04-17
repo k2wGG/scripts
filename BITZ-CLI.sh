@@ -4,7 +4,7 @@
 [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 
 SCRIPT_NAME="BITZ-CLI"
-SCRIPT_VERSION="1.1.1"
+SCRIPT_VERSION="1.1.3"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/BITZ-CLI.sh"
 
@@ -13,15 +13,12 @@ NC='\033[0m'
 
 # === Фиксированный RPC (Eclipse/Helius) ===
 RPC_URL="https://eclipse.helius-rpc.com"
-solana config set --url $RPC_URL
+solana config set --url "$RPC_URL"
 
 # === Параметры комиссии (Compute Unit price) ===
-# Сколько микролампортов платить за 1 CU
-PRIORITY_FEE=100000
-# Ждать ли, пока плата упадёт до MIN_FEE_TARGET?
-WAIT_ON_FEE=true
-# Нижний порог лампорт/подпись для отправки
-MIN_FEE_TARGET=10000
+PRIORITY_FEE=100000      # микролампортов за 1 CU
+WAIT_ON_FEE=true         # ждать ли, пока базовая плата упадёт до MIN_FEE_TARGET?
+MIN_FEE_TARGET=10000     # лампорт/подпись
 
 # Собираем флаги для bitz
 build_fee_flags() {
@@ -29,7 +26,7 @@ build_fee_flags() {
 }
 
 show_logo() {
-cat <<'EOF'
+  cat <<'EOF'
  _   _           _  _____      
 | \ | |         | ||____ |     
 |  \| | ___   __| |    / /_ __ 
@@ -47,9 +44,9 @@ header() {
   show_logo
   echo -e "${NC}"
   echo "Версия скрипта: ${SCRIPT_VERSION}"
-  remote_version=$(curl -s "$VERSIONS_FILE_URL" \
-                     | grep "^${SCRIPT_NAME}=" \
-                     | cut -d'=' -f2)
+  echo "RPC: ${RPC_URL}"
+  echo "Комиссии: PRIORITY_FEE=$PRIORITY_FEE, WAIT_ON_FEE=$WAIT_ON_FEE, MIN_FEE_TARGET=$MIN_FEE_TARGET"
+  remote_version=$(curl -s "$VERSIONS_FILE_URL" | grep "^${SCRIPT_NAME}=" | cut -d'=' -f2)
   if [[ -n "$remote_version" ]]; then
     if [[ "$remote_version" != "$SCRIPT_VERSION" ]]; then
       echo "⚠️ Доступна новая версия: ${remote_version}"
@@ -63,40 +60,30 @@ header() {
   echo ""
 }
 
-pause() {
-  read -rp "Нажмите Enter, чтобы продолжить..."
-}
+pause() { read -rp "Нажмите Enter, чтобы продолжить..."; }
 
 install_dependencies() {
   header
   echo "Установка зависимостей..."
   sudo apt update && sudo apt upgrade -y
-  sudo apt install -y screen curl nano build-essential pkg-config \
-                      libssl-dev clang jq
+  sudo apt install -y screen curl nano build-essential pkg-config libssl-dev clang jq
 
-  # Rust / cargo
   if ! command -v cargo &>/dev/null; then
     echo "Устанавливаем Rust..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-      | sh -s -- -y
+    curl https://sh.rustup.rs -sSf | sh -s -- -y
     source "$HOME/.cargo/env"
     echo 'source "$HOME/.cargo/env"' >> ~/.bashrc
-  else
-    source "$HOME/.cargo/env"
   fi
 
-  # Solana CLI
   if ! command -v solana &>/dev/null; then
     echo "Устанавливаем Solana CLI..."
     sh -c "$(curl -sSfL https://release.solana.com/v1.18.2/install)"
-    export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-    echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' \
-      >> ~/.bashrc
+    echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
     source ~/.bashrc
   fi
 
-  solana config set --url $RPC_URL
-  echo -e "\n✅ Зависимости установлены."
+  solana config set --url "$RPC_URL"
+  echo "✅ Зависимости установлены."
   pause
 }
 
@@ -109,8 +96,7 @@ create_wallet() {
       solana-keygen new --force
     else
       echo "Отмена."
-      pause
-      return
+      pause; return
     fi
   else
     solana-keygen new
@@ -120,7 +106,7 @@ create_wallet() {
 
 show_private_key() {
   header
-  echo "Приватный ключ (id.json):"
+  echo "Приватный ключ:"
   cat "$HOME/.config/solana/id.json"
   pause
 }
@@ -128,9 +114,8 @@ show_private_key() {
 install_bitz() {
   header
   if ! command -v cargo &>/dev/null; then
-    echo "Cargo не найден. Сначала установите Rust."
-    pause
-    return
+    echo "Cargo не найден."
+    pause; return
   fi
   echo "Установка BITZ..."
   cargo install bitz --force
@@ -140,30 +125,20 @@ install_bitz() {
 start_miner() {
   header
   if ! command -v bitz &>/dev/null; then
-    echo "❌ 'bitz' не найден. Установите BITZ (пункт 4)."
-    pause
-    return
+    echo "❌ 'bitz' не найден."
+    pause; return
   fi
+  read -rp "Ядер для майнинга (1-16): " CORES
+  [[ ! "$CORES" =~ ^[0-9]+$ ]] && echo "Нужно число!" && pause && return
 
-  read -rp "Сколько ядер использовать (4 из 16): " CORES
-  if [[ ! "$CORES" =~ ^[0-9]+$ ]]; then
-    echo "❌ Введите число."
-    pause
-    return
-  fi
-
-  LOG="$HOME/bitz.log"
-  rm -f "$LOG"
-
+  LOG="$HOME/bitz.log"; rm -f "$LOG"
   FFLAGS=$(build_fee_flags)
-  echo "▶️ Запуск майнинга: bitz $FFLAGS collect --cores $CORES"
   screen -dmS bitz bash -c "bitz $FFLAGS collect --cores $CORES 2>&1 | tee -a '$LOG'"
-
   sleep 2
   if screen -list | grep -q "\.bitz"; then
-    echo "✅ Майнинг запущен. Лог: $LOG"
+    echo "✅ Майнинг запущен (лог: $LOG)"
   else
-    echo "❌ Не удалось запустить. Смотрите лог: $LOG"
+    echo "❌ Ошибка запуска (см. $LOG)"
   fi
   pause
 }
@@ -171,8 +146,7 @@ start_miner() {
 stop_miner() {
   header
   if screen -list | grep -q "\.bitz"; then
-    screen -XS bitz quit
-    echo "🛑 Майнинг остановлен."
+    screen -XS bitz quit && echo "🛑 Майнинг остановлен."
   else
     echo "ℹ️ Нет активной сессии."
   fi
@@ -181,37 +155,29 @@ stop_miner() {
 
 check_account() {
   header
-  if ! command -v bitz &>/dev/null; then
-    echo "❌ 'bitz' не найден."
-  else
-    bitz $(build_fee_flags) account
-  fi
+  bitz $(build_fee_flags) account
   pause
 }
 
-# Берём базовую плату через JSON-RPC getLatestBlockhash
+# Получение базовой платы через JSON-RPC
 get_current_fee() {
-  curl -s -X POST -H "Content-Type: application/json" \
-    -d '{
-      "jsonrpc":"2.0",
-      "id":1,
-      "method":"getLatestBlockhash",
-      "params":[{"commitment":"confirmed"}]
-    }' \
-    "$RPC_URL" \
-  | jq '.result.value.feeCalculator.lamportsPerSignature'
+  local resp blockhash resp2
+  resp=$(curl -s -X POST -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"getLatestBlockhash","params":[{"commitment":"confirmed"}]}' \
+    "$RPC_URL")
+  blockhash=$(echo "$resp" | jq -r '.result.value.blockhash')
+  resp2=$(curl -s -X POST -H "Content-Type: application/json" \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getFeeCalculatorForBlockhash\",\"params\":[\"$blockhash\",{\"commitment\":\"confirmed\"}]}" \
+    "$RPC_URL")
+  echo "$resp2" | jq '.result.value.feeCalculator.lamportsPerSignature'
 }
 
-# Ждём, пока базовая плата упадёт до MIN_FEE_TARGET
 wait_for_low_fee() {
-  echo "⏳ Ожидание платы ≤ $MIN_FEE_TARGET..."
+  echo "⏳ Ожидаем платы <= $MIN_FEE_TARGET lamports..."
   while true; do
     fee=$(get_current_fee)
-    echo "  текущая базовая плата = $fee"
-    if (( fee <= MIN_FEE_TARGET )); then
-      echo "✅ Плата достигла $fee."
-      break
-    fi
+    echo "  текущая плата = $fee"
+    (( fee <= MIN_FEE_TARGET )) && { echo "✅ OK: $fee"; break; }
     sleep 60
   done
 }
@@ -219,53 +185,40 @@ wait_for_low_fee() {
 show_fee_info() {
   header
   echo "🔍 Инфо по RPC $RPC_URL"
-  echo "  Lamports per signature (базовая): $(get_current_fee)"
-  echo ""
-  echo "Текущие параметры:"
-  echo "  PRIORITY_FEE  = $PRIORITY_FEE"
-  echo "  WAIT_ON_FEE   = $WAIT_ON_FEE"
-  echo "  MIN_FEE_TARGET= $MIN_FEE_TARGET"
+  echo "  Lamports per signature: $(get_current_fee)"
+  pause
+}
+
+set_fee_settings() {
+  header
+  echo "🔧 Настройка комиссии"
+  read -rp "PRIORITY_FEE [$PRIORITY_FEE]: " x && [[ $x ]] && PRIORITY_FEE=$x
+  read -rp "WAIT_ON_FEE (true/false) [$WAIT_ON_FEE]: " x && [[ $x ]] && WAIT_ON_FEE=$x
+  read -rp "MIN_FEE_TARGET [$MIN_FEE_TARGET]: " x && [[ $x ]] && MIN_FEE_TARGET=$x
+  echo "✅ Сохранено."
   pause
 }
 
 claim_tokens() {
   header
-  if ! command -v bitz &>/dev/null; then
-    echo "❌ 'bitz' не найден."
-    pause
-    return
-  fi
-
-  if [[ "$WAIT_ON_FEE" == "true" ]]; then
-    wait_for_low_fee
-  fi
-
-  ADDR=$(bitz account | grep Address | awk '{print $2}')
+  [[ "$WAIT_ON_FEE" == "true" ]] && wait_for_low_fee
+  addr=$(bitz account | awk '/Address/ {print $2}')
   FFLAGS=$(build_fee_flags)
-  echo "▶️ Claim → $ADDR (flags: $FFLAGS)"
-  bitz $FFLAGS claim --to "$ADDR" \
-    || echo "❌ Ошибка при claim"
+  echo "▶️ Claim → $addr ($FFLAGS)"
+  bitz $FFLAGS claim --to "$addr" || echo "❌ Ошибка claim"
   pause
 }
 
 uninstall_node() {
   header
-  echo "⚠️ Удаление всего:"
+  echo "⚠️ Удаление всего..."
   read -rp "Подтвердите (yes/no): " yn
-  if [[ "$yn" != "yes" ]]; then
-    echo "Отмена."
-    pause
-    return
-  fi
-
+  [[ "$yn" != "yes" ]] && echo "Отмена." && pause && return
   cargo uninstall bitz 2>/dev/null
-  rm -rf ~/.cargo ~/.rustup
-  rm -rf ~/.local/share/solana ~/.config/solana
-  sudo apt remove --purge -y screen
+  rm -rf ~/.cargo ~/.rustup ~/.local/share/solana ~/.config/solana ~/bitz.log
+  sudo apt remove --purge -y screen jq clang pkg-config libssl-dev
   sudo apt autoremove -y
-  rm -f ~/bitz.log
-
-  echo "✅ Удалено."
+  echo "✅ Всё удалено."
   pause
 }
 
@@ -281,8 +234,9 @@ show_menu() {
     echo "7) Проверить баланс"
     echo "8) Вывести токены (claim)"
     echo "9) Показать комиссию"
-    echo "10) Удалить всё"
-    echo "11) Выйти"
+    echo "10) Настройки комиссии"
+    echo "11) Удалить всё"
+    echo "12) Выйти"
     read -rp "👉 Введите номер: " choice
 
     case $choice in
@@ -295,8 +249,9 @@ show_menu() {
       7) check_account      ;;
       8) claim_tokens       ;;
       9) show_fee_info      ;;
-      10) uninstall_node    ;;
-      11) echo "👋 Выход" && exit 0 ;;
+      10) set_fee_settings  ;;
+      11) uninstall_node    ;;
+      12) echo "👋 Выход" && exit 0 ;;
       *) echo "❌ Неверный выбор." && sleep 1 ;;
     esac
   done
