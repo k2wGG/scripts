@@ -6,4 +6,4 @@ pipe=1.0.0
 layeredge-CLI=1.0.0
 Gensyn=1.0.0
 abstract=1.0.0
-BITZ-CLI=1.1.3
+BITZ-CLI=1.2.0
