@@ -1,5 +1,11 @@
 #!/bin/bash
 
+# Имя и версии
+SCRIPT_NAME="drosera"
+SCRIPT_VERSION="1.0.0"
+VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
+SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/drosera-node-manager.sh"
+
 # Цветовые коды
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -24,6 +30,11 @@ display_logo() {
 EOF
 }
 
+# Вывод сообщений
+success_message() { echo -e "${GREEN}[✅]${NC} $1"; }
+info_message()    { echo -e "${CYAN}[ℹ️]${NC} $1"; }
+error_message()   { echo -e "${RED}[❌]${NC} $1"; }
+
 # Проверка и установка curl
 ensure_curl() {
     if ! command -v curl &>/dev/null; then
@@ -32,17 +43,33 @@ ensure_curl() {
     fi
 }
 
-# Вывод сообщений
-success_message() { echo -e "${GREEN}[✅]${NC} $1"; }
-info_message()    { echo -e "${CYAN}[ℹ️]${NC} $1"; }
-error_message()   { echo -e "${RED}[❌]${NC} $1"; }
+# Автообновление скрипта
+auto_update() {
+    info_message "Проверка новой версии скрипта..."
+    latest=$(curl -fsSL "$VERSIONS_FILE_URL" | grep -E "^$SCRIPT_NAME[[:space:]]" | awk '{print $2}')
+    if [[ -z "$latest" ]]; then
+        error_message "Не удалось получить версию из $VERSIONS_FILE_URL"
+        return
+    fi
+    if [[ "$latest" != "$SCRIPT_VERSION" ]]; then
+        info_message "Найдена новая версия: $latest (у вас $SCRIPT_VERSION)"
+        info_message "Загружаю обновлённый скрипт..."
+        curl -fsSL "$SCRIPT_FILE_URL" -o /tmp/drosera-node-manager.sh
+        chmod +x /tmp/drosera-node-manager.sh
+        success_message "Обновление завершено. Запускаю новую версию..."
+        exec /tmp/drosera-node-manager.sh
+    else
+        success_message "Версия актуальна: $SCRIPT_VERSION"
+    fi
+}
 
 # Функция установки зависимостей
 install_dependencies() {
     info_message "Установка необходимых пакетов..."
     sudo apt-get update && sudo apt-get upgrade -y
-    sudo apt install curl ufw iptables build-essential git wget lz4 jq make gcc nano automake autoconf tmux htop nvme-cli \
-        libgbm1 pkg-config libssl-dev libleveldb-dev tar clang bsdmainutils ncdu unzip -y
+    sudo apt install curl ufw iptables build-essential git wget lz4 jq make gcc nano \
+        automake autoconf tmux htop nvme-cli libgbm1 pkg-config libssl-dev \
+        libleveldb-dev tar clang bsdmainutils ncdu unzip -y
 
     info_message "Установка специфических инструментов..."
     curl -L https://app.drosera.io/install | bash
@@ -118,12 +145,10 @@ start_node() {
     info_message "Запуск ноды Drosera..."
     cd ~
 
-    # Скачиваем и устанавливаем бинарник
     curl -LO https://github.com/drosera-network/releases/releases/download/v1.16.2/drosera-operator-v1.16.2-x86_64-unknown-linux-gnu.tar.gz
     tar -xvf drosera-operator-v1.16.2-x86_64-unknown-linux-gnu.tar.gz
     sudo cp drosera-operator /usr/bin
 
-    # Регистрируем оператора
     read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY
     echo
     export DROSERA_PRIVATE_KEY="$PRIV_KEY"
@@ -131,12 +156,10 @@ start_node() {
       --eth-rpc-url https://ethereum-holesky-rpc.publicnode.com \
       --eth-private-key "$DROSERA_PRIVATE_KEY"
 
-    # Собираем абсолютные пути
     SERVER_IP=$(curl -s https://api.ipify.org)
     BIN_PATH=$(which drosera-operator)
     DB_PATH="$HOME/.drosera.db"
 
-    # Генерируем unit-файл с развёрнутыми переменными
     sudo tee /etc/systemd/system/drosera.service > /dev/null <<EOF
 [Unit]
 Description=drosera node service
@@ -163,7 +186,6 @@ ExecStart=$BIN_PATH node \
 WantedBy=multi-user.target
 EOF
 
-    # Перезагружаем и стартуем сервис
     sudo systemctl daemon-reload
     sudo systemctl enable drosera
     sudo systemctl restart drosera
@@ -188,7 +210,7 @@ remove_node() {
 display_menu() {
     clear
     display_logo
-    echo -e "${BOLD}${WHITE}Drosera Node Manager${NC}\n"
+    echo -e "${BOLD}${WHITE}Drosera Node Manager v${SCRIPT_VERSION}${NC}\n"
     echo -e "${YELLOW}1)${NC} Установить зависимости"
     echo -e "${YELLOW}2)${NC} Деплой Trap"
     echo -e "${YELLOW}3)${NC} Установить ноду"
@@ -203,20 +225,21 @@ display_menu() {
 
 # Главный цикл
 ensure_curl
+auto_update
 while true; do
     display_menu
     read -r choice
     case $choice in
-        1) install_dependencies ;;
-        2) deploy_trap         ;;
-        3) install_node        ;;
-        4) start_node          ;;
-        5) info_message "Проверка статуса..."; echo "Ваша нода работает на последней версии" ;;
-        6) info_message "Просмотр логов..."; journalctl -u drosera.service -f ;;
-        7) info_message "Перезапуск ноды..."; sudo systemctl restart drosera; journalctl -u drosera.service -f ;;
-        8) remove_node         ;;
-        9) echo -e "${GREEN}👋 До свидания!${NC}"; exit 0 ;;
-        *) error_message "Неверный ввод, попробуйте снова." ;;
+        1) install_dependencies ;;        
+        2) deploy_trap         ;;        
+        3) install_node        ;;        
+        4) start_node          ;;        
+        5) info_message "Проверка статуса..."; echo "Ваша нода работает на последней версии" ;;        
+        6) info_message "Просмотр логов..."; journalctl -u drosera.service -f ;;        
+        7) info_message "Перезапуск ноды..."; sudo systemctl restart drosera; journalctl -u drosera.service -f ;;        
+        8) remove_node         ;;        
+        9) echo -e "${GREEN}👋 До свидания!${NC}"; exit 0 ;;        
+        *) error_message "Неверный ввод, попробуйте снова." ;;    
     esac
     echo -ne "\n${WHITE}Нажмите Enter для продолжения...${NC}"
     read -r
