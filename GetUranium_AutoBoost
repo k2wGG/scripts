@@ -1,92 +1,181 @@
 // ==UserScript==
-// @name         GetUranium AutoBoost v2
+// @name         GetUranium AutoBoost v2 (UI‑edition)
 // @namespace    https://github.com/k2wGG
-// @version      2.0
-// @description  Автозапуск всех трёх бустеров с корректным таймером
+// @version      2.1
+// @description  Автозапуск трёх бустеров + шестерёнка‑GUI для тонкой настройки
 // @match        https://www.geturanium.io/*
 // @run-at       document-end
 // @grant        none
 // ==/UserScript==
 
+/*────────────────────────  0. Bootstrap & helpers  ────────────────────────*/
 (function () {
   'use strict';
-  console.log('🚀 AutoBoost v4 loaded');
+  console.log('🚀 AutoBoost v2 (UI) loaded');
 
-  /* 0. «Глушим» проверку isTrusted (React блокирует synthetic‑click) */
+  /* 0.1 «Глушим» isTrusted — React блокирует synthetic‑click */
   [Event, MouseEvent].forEach(C =>
     Object.defineProperty(C.prototype, 'isTrusted', {
-      get() { return true; },
-      configurable: true
+      get() { return true; }, configurable: true
     })
   );
 
-  /* 1. Какие бустеры держим включёнными */
-  const CFG = { autoAC: true, autoSM: true, autoCB: true };
+  /* 0.2 Defaults + storage */
+  const DEF = {
+    enabled : true,
+    autoAC  : true,
+    autoSM  : true,
+    autoCB  : true,
+    logEach : 10          // сек; 0 — отключить периодические логи
+  };
+  const LS_KEY = 'gu‑autoboost';
+  const cfg = load();
 
-  /* 2. Человеческие ярлыки для поиска кнопок */
+  function load(){
+    try{ return {...DEF, ...JSON.parse(localStorage.getItem(LS_KEY)||'{}')};}
+    catch(e){ return {...DEF};}
+  }
+  function save(){ localStorage.setItem(LS_KEY,JSON.stringify(cfg)); }
+
+  /*────────────────────────  1. Поиск и клик  ─────────────────────────────*/
   const LABEL = {
-    autoAC: 'auto collector',
-    autoSM: 'shard multiplier',
-    autoCB: 'conveyor booster'
+    autoAC:'auto collector',
+    autoSM:'shard multiplier',
+    autoCB:'conveyor booster'
   };
 
-  /* 3. Поиск «живой» кнопки */
-  function findBtn(flag) {
-    const label = LABEL[flag];
+  const timers = {};             // {flag: timeoutID}
+  const nextLog = {value: Date.now()};
+
+  function findBtn(flag){
+    const lbl = LABEL[flag];
     return [...document.querySelectorAll('button')]
-      .find(b => b.innerText.toLowerCase().startsWith(label));
+           .find(b=>b.innerText.toLowerCase().startsWith(lbl));
   }
 
-  /* 4. Парсим " 9 m 54 s remaining " → миллисекунды */
-  function getRestMs(btn) {
-    if (!btn || !btn.disabled) return 0;               // кнопка активна
-    const m = /(\d+)\s*m.*?(\d+)\s*s/.exec(btn.innerText);
-    if (m) return (Number(m[1]) * 60 + Number(m[2])) * 1000;
-    return 600_000;                                   // fallback 10 мин
+  function getRestMs(btn){
+    if(!btn || !btn.disabled) return 0;
+    const m=/(\d+)\s*m.*?(\d+)\s*s/.exec(btn.innerText);
+    if(m) return (60*+m[1]+ +m[2])*1000;
+    return 600_000;              // fallback 10 мин
   }
 
-  /* 5. «Честный» клик — mousedown → mouseup → click */
-  function simulateClick(el) {
-    ['mousedown', 'mouseup', 'click'].forEach(type =>
-      el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window })));
+  function simulateClick(el){
+    ['mousedown','mouseup','click'].forEach(type=>
+      el.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window}))
+    );
   }
 
-  /* 6. Планировщик для каждого флага */
-  const timers = {};                                  // {flag: timeoutID}
-  function schedule(flag) {
+  /*────────────────────────  2. Планировщик  ──────────────────────────────*/
+  function schedule(flag){
     clearTimeout(timers[flag]);
-    const btn   = findBtn(flag);
-    const rest  = getRestMs(btn);
-
-    if (rest === 0) {                                 // бустер выключен
-      if (CFG[flag] && btn && !btn.disabled) {
-        console.log(`⚡️ [AutoBoost] clicking "${flag}"`);
-        simulateClick(btn);
-      }
-      timers[flag] = setTimeout(() => schedule(flag), 1_000);  // пересчёт через 1 с
+    if(!cfg.enabled){                       // скрипт выключен
+      timers[flag]=setTimeout(()=>schedule(flag),3000);
       return;
     }
 
-    console.log(`⏳ [AutoBoost] ${flag}: ${Math.round(rest / 1000)} s left`);
-    timers[flag] = setTimeout(() => schedule(flag), rest + 1_000);
+    const btn  = findBtn(flag);
+    const rest = getRestMs(btn);
+
+    if(rest===0){                           // бустер неактивен
+      if(cfg[flag] && btn && !btn.disabled){
+        simulateClick(btn);
+        log(`⚡ click "${flag}"`);
+      }
+      timers[flag]=setTimeout(()=>schedule(flag),1000);
+      return;
+    }
+
+    log(`⏳ ${flag}: ${Math.round(rest/1000)} s left`);
+    timers[flag]=setTimeout(()=>schedule(flag),rest+1000);
   }
 
-  /* 7. Старт после первого рендера */
-  function init() {
-    if (!findBtn('autoAC')) {                          // кнопки ещё не дорисованы
-      requestAnimationFrame(init);
-      return;
-    }
-    console.log('✅ AutoBoost initialised');
-    Object.keys(CFG).forEach(schedule);
+  function startAll(){ Object.keys(LABEL).forEach(schedule); }
+
+  /*────────────────────────  3. Инициализация  ────────────────────────────*/
+  function init(){
+    if(!findBtn('autoAC')){ requestAnimationFrame(init); return;}
+    console.log('✅ AutoBoost initialised');
+    startAll();
   }
   init();
 
-  /* 8. Отслеживаем любые перерисовки кнопок */
-  const ob = new MutationObserver(muts => {
-    if (!muts.some(m => m.type === 'childList')) return;
-    Object.keys(CFG).forEach(flag => schedule(flag));
+  /* пересчёт при любом перерендере кнопок */
+  const ob=new MutationObserver(muts=>{
+    if(muts.some(m=>m.type==='childList')) startAll();
   });
-  ob.observe(document.documentElement, { childList: true, subtree: true });
+  ob.observe(document.documentElement,{childList:true,subtree:true});
 
-})();
+  /*────────────────────────  4. Логирование  ─────────────────────────────*/
+  function log(str){
+    if(!cfg.logEach) return;                             // выключено
+    const now=Date.now();
+    if(now>=nextLog.value){
+      console.log(`[AutoBoost] ${str}`);
+      nextLog.value=now+cfg.logEach*1000;
+    }
+  }
+
+  /*────────────────────────  5. GUI (шестерёнка)  ─────────────────────────*/
+  (function injectUI(){
+    if(document.querySelector('.gu‑gear')) return;       // уже есть
+
+    document.body.insertAdjacentHTML('beforeend',`
+<style>
+.gu‑gear{position:fixed;top:12px;right:12px;width:36px;height:36px;
+         background:#1b1b25dd;border-radius:50%;display:flex;align-items:center;
+         justify-content:center;cursor:pointer;z-index:2147483647;
+         color:#8cf;font-size:20px;user-select:none}
+.gu‑panel{position:fixed;top:56px;right:12px;width:230px;background:#1b1b25f2;
+          padding:12px 14px;border-radius:8px;font:13px/1.4 sans-serif;
+          color:#cee;box-shadow:0 4px 12px #000b;z-index:2147483647;
+          backdrop-filter:blur(4px)}
+.gu‑panel hr{border-color:#444;margin:6px -14px}
+.gu‑panel input[type=number]{width:60px;margin-left:4px;background:#111;
+          color:#fee;border:1px solid #555;border-radius:4px;padding:2px 4px}
+.gu‑panel label{display:block;margin:5px 0}
+.gu‑panel button{margin-top:6px;padding:2px 8px;background:#444;border:0;
+          border-radius:4px;color:#eee;cursor:pointer}
+</style>
+
+<div class="gu‑gear" title="AutoBoost settings">⚙️</div>
+<div class="gu‑panel" style="display:none">
+  <label><input type="checkbox" id="gu‑enabled"> script enabled</label><hr>
+  <label><input type="checkbox" id="gu‑ac"> Auto Collector</label>
+  <label><input type="checkbox" id="gu‑sm"> Shard Multiplier</label>
+  <label><input type="checkbox" id="gu‑cb"> Conveyor Booster</label><hr>
+  log each <input type="number" id="gu‑log" min="0" step="1"> s
+  <button id="gu‑reset">reset</button>
+</div>`);
+
+    const $ = s=>document.querySelector(s),
+          gear = $('.gu‑gear'),
+          pnl  = $('.gu‑panel');
+
+    /* синхронизация чекбоксов/полей */
+    function sync(){
+      $('#gu‑enabled').checked=cfg.enabled;
+      $('#gu‑ac').checked     =cfg.autoAC;
+      $('#gu‑sm').checked     =cfg.autoSM;
+      $('#gu‑cb').checked     =cfg.autoCB;
+      $('#gu‑log').value      =cfg.logEach;
+    }
+    sync();
+
+    $('#gu‑enabled').onchange=e=>{cfg.enabled=e.target.checked;save();startAll();};
+    $('#gu‑ac').onchange   =e=>{cfg.autoAC =e.target.checked;save();startAll();};
+    $('#gu‑sm').onchange   =e=>{cfg.autoSM =e.target.checked;save();startAll();};
+    $('#gu‑cb').onchange   =e=>{cfg.autoCB =e.target.checked;save();startAll();};
+    $('#gu‑log').onchange  =e=>{cfg.logEach=Math.max(0,~~e.target.value);save();};
+    $('#gu‑reset').onclick =()=>{
+      Object.assign(cfg,DEF); save(); sync(); startAll(); console.clear();
+    };
+
+    const toggle=()=>pnl.style.display=pnl.style.display==='none'?'block':'none';
+    gear.onclick=toggle;
+    window.addEventListener('keydown',e=>{
+      if(e.altKey && e.key.toLowerCase()==='g'){ e.preventDefault(); toggle(); }
+    });
+  })();
+
+})();   /* === END SCRIPT === */
