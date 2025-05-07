@@ -1,1 +1,92 @@
+// ==UserScript==
+// @name         GetUranium AutoBoost v2
+// @namespace    https://github.com/k2wGG
+// @version      2.0
+// @description  Автозапуск всех трёх бустеров с корректным таймером
+// @match        https://www.geturanium.io/*
+// @run-at       document-end
+// @grant        none
+// ==/UserScript==
 
+(function () {
+  'use strict';
+  console.log('🚀 AutoBoost v4 loaded');
+
+  /* 0. «Глушим» проверку isTrusted (React блокирует synthetic‑click) */
+  [Event, MouseEvent].forEach(C =>
+    Object.defineProperty(C.prototype, 'isTrusted', {
+      get() { return true; },
+      configurable: true
+    })
+  );
+
+  /* 1. Какие бустеры держим включёнными */
+  const CFG = { autoAC: true, autoSM: true, autoCB: true };
+
+  /* 2. Человеческие ярлыки для поиска кнопок */
+  const LABEL = {
+    autoAC: 'auto collector',
+    autoSM: 'shard multiplier',
+    autoCB: 'conveyor booster'
+  };
+
+  /* 3. Поиск «живой» кнопки */
+  function findBtn(flag) {
+    const label = LABEL[flag];
+    return [...document.querySelectorAll('button')]
+      .find(b => b.innerText.toLowerCase().startsWith(label));
+  }
+
+  /* 4. Парсим " 9 m 54 s remaining " → миллисекунды */
+  function getRestMs(btn) {
+    if (!btn || !btn.disabled) return 0;               // кнопка активна
+    const m = /(\d+)\s*m.*?(\d+)\s*s/.exec(btn.innerText);
+    if (m) return (Number(m[1]) * 60 + Number(m[2])) * 1000;
+    return 600_000;                                   // fallback 10 мин
+  }
+
+  /* 5. «Честный» клик — mousedown → mouseup → click */
+  function simulateClick(el) {
+    ['mousedown', 'mouseup', 'click'].forEach(type =>
+      el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window })));
+  }
+
+  /* 6. Планировщик для каждого флага */
+  const timers = {};                                  // {flag: timeoutID}
+  function schedule(flag) {
+    clearTimeout(timers[flag]);
+    const btn   = findBtn(flag);
+    const rest  = getRestMs(btn);
+
+    if (rest === 0) {                                 // бустер выключен
+      if (CFG[flag] && btn && !btn.disabled) {
+        console.log(`⚡️ [AutoBoost] clicking "${flag}"`);
+        simulateClick(btn);
+      }
+      timers[flag] = setTimeout(() => schedule(flag), 1_000);  // пересчёт через 1 с
+      return;
+    }
+
+    console.log(`⏳ [AutoBoost] ${flag}: ${Math.round(rest / 1000)} s left`);
+    timers[flag] = setTimeout(() => schedule(flag), rest + 1_000);
+  }
+
+  /* 7. Старт после первого рендера */
+  function init() {
+    if (!findBtn('autoAC')) {                          // кнопки ещё не дорисованы
+      requestAnimationFrame(init);
+      return;
+    }
+    console.log('✅ AutoBoost initialised');
+    Object.keys(CFG).forEach(schedule);
+  }
+  init();
+
+  /* 8. Отслеживаем любые перерисовки кнопок */
+  const ob = new MutationObserver(muts => {
+    if (!muts.some(m => m.type === 'childList')) return;
+    Object.keys(CFG).forEach(flag => schedule(flag));
+  });
+  ob.observe(document.documentElement, { childList: true, subtree: true });
+
+})();
