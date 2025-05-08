@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GetUranium AutoBoost v2
 // @namespace    https://github.com/k2wGG
-// @version      2.6
-// @description  Автозапуск бустеров + анти-429 + keep-alive + Vercel-keepalive + hard-reload + статистика
+// @version      2.7
+// @description  Автозапуск бустеров
 // @match        https://www.geturanium.io/*
 // @run-at       document-idle
 // @inject-into  page
@@ -11,13 +11,14 @@
 
 ;(function(){
   'use strict';
-  console.info('🚀 AutoBoost v2.6 loaded');
+  console.info('🚀 AutoBoost v2.7 loaded');
 
   // 0) React isTrusted patch
   if(!Event.prototype.__ab_trusted){
     [Event, MouseEvent].forEach(C=>{
       Object.defineProperty(C.prototype,'isTrusted',{
-        get(){return true;}, configurable:true
+        get(){ return true; },
+        configurable: true
       });
     });
     Event.prototype.__ab_trusted = true;
@@ -29,10 +30,11 @@
     autoAC:        true,
     autoSM:        true,
     autoCB:        true,
+    autoFarm:      true,        // ← новый флаг
     keepAlive:     true,
     autoReload:    true,
-    reloadMinutes: 50,   // интервал в минутах
-    logEach:       10    // секунд между логами
+    reloadMinutes: 50,
+    logEach:       10
   };
   const LS_CFG   = 'gu-autoboost-config';
   const LS_STATS = 'gu-autoboost-stats';
@@ -46,7 +48,6 @@
   function saveConfig(){
     localStorage.setItem(LS_CFG, JSON.stringify(cfg));
   }
-
   function loadStats(){
     try{
       return JSON.parse(sessionStorage.getItem(LS_STATS)) || {
@@ -88,8 +89,12 @@
   });
 
   // 4) Auto-click boosters
-  const LABELS = { autoAC:'auto collector', autoSM:'shard multiplier', autoCB:'conveyor booster' };
-  const timers    = {}, lastClick = {}, nextLog = { value: Date.now() };
+  const LABELS = {
+    autoAC: 'auto collector',
+    autoSM: 'shard multiplier',
+    autoCB: 'conveyor booster'
+  };
+  const timers = {}, lastClick = {}, nextLog = { value: Date.now() };
 
   function findBtn(key){
     return Array.from(document.querySelectorAll('button'))
@@ -135,7 +140,7 @@
   }
   function startAll(){ Object.keys(LABELS).forEach(schedule); }
 
-  // 5) Auto-reload with timer reset
+  // 5) Auto-reload
   let reloadTimer = null;
   function scheduleReload(){
     if(reloadTimer) clearTimeout(reloadTimer);
@@ -152,10 +157,10 @@
     location.replace(url);
   }
 
-  // 6) Vercel iframe keep-alive
+  // 6) Vercel keep-alive
   function scheduleVercel(){
     if(!cfg.keepAlive) return;
-    const ms = rnd(50,55) * 60 * 1000;
+    const ms = rnd(50,55)*60*1000;
     console.info(`[AutoBoost] Vercel keepalive in ≈${Math.round(ms/60000)}m`);
     setTimeout(()=>{
       const f = document.createElement('iframe');
@@ -166,7 +171,24 @@
     }, ms);
   }
 
-  // 7) Init
+  // 7) Farm reward every 8 hours (toggleable)
+  let farmTimer = null;
+  function doFarm(){
+    const farmBtn = document.querySelector('button.farm-reward');
+    if(farmBtn && !farmBtn.disabled){
+      console.info('🌾 Farm reward');
+      doClick(farmBtn);
+    }
+  }
+  function scheduleFarm(){
+    if(farmTimer) clearInterval(farmTimer);
+    if(!cfg.autoFarm) return;
+    farmTimer = setInterval(doFarm, 8*60*60*1000);
+    // можно сразу запустить раз при инициализации:
+    doFarm();
+  }
+
+  // 8) Init
   function init(){
     if(!findBtn('autoAC')){
       requestAnimationFrame(init);
@@ -177,13 +199,14 @@
     renderUI();
     scheduleReload();
     scheduleVercel();
+    scheduleFarm();            // запускаем планировщик фарма
   }
   if(document.readyState==='complete') init();
   else window.addEventListener('load', init, { once:true });
   new MutationObserver(m=> m.some(x=>x.type==='childList') && startAll())
     .observe(document.documentElement,{childList:true,subtree:true});
 
-  // 8) Logging
+  // 9) Logging
   function log(msg){
     if(!cfg.logEach) return;
     const now = Date.now();
@@ -193,9 +216,8 @@
     }
   }
 
-  // 9) UI + stats
-  let updateStatsUI = ()=>{};  // объявляем в замыкании
-
+  // 10) UI + stats (добавлен чекбокс для autoFarm)
+  let updateStatsUI = ()=>{};
   function renderUI(){
     if(document.querySelector('.gu-gear')) return;
     const css = `
@@ -228,6 +250,7 @@
         <div class="row"><label><input id="gu-ac" type="checkbox"> Auto Collector</label></div>
         <div class="row"><label><input id="gu-sm" type="checkbox"> Shard Multiplier</label></div>
         <div class="row"><label><input id="gu-cb" type="checkbox"> Conveyor Booster</label></div><hr/>
+        <div class="row"><label><input id="gu-farm" type="checkbox"> Auto Farm (8h)</label></div><hr/>
         <div class="row"><label><input id="gu-ka" type="checkbox"> keepAlive</label></div>
         <div class="row"><label><input id="gu-reload" type="checkbox"> autoReload</label></div>
         <div class="row">
@@ -239,7 +262,7 @@
           <input id="gu-log" type="number" min="0"/>
         </div><hr/>
         <div class="row"><label>Reload Count</label><div id="stat-reloads" class="stat-value">0</div></div>
-        <div class="row"><label>Collector Clicks</label><div id="stat-autoAC" class="stat-value">0</div></div>
+        <div class="row"><label>Collector Clicks</label><div id="stat-autoAC"  class="stat-value">0</div></div>
         <div class="row"><label>Shard Clicks</label><div id="stat-autoSM" class="stat-value">0</div></div>
         <div class="row"><label>Booster Clicks</label><div id="stat-autoCB" class="stat-value">0</div></div><hr/>
         <button id="gu-reset">Reset to Defaults</button>
@@ -252,7 +275,6 @@
           gear  = $('.gu-gear'),
           panel = $('.gu-panel');
 
-    // определяем updateStatsUI в этой области, но в замыкании
     updateStatsUI = ()=>{
       $('#stat-reloads').textContent = stats.reloadCount;
       $('#stat-autoAC').textContent   = stats.clickCount.autoAC;
@@ -261,36 +283,33 @@
     };
 
     function syncUI(){
-      $('#gu-enabled').checked    = cfg.enabled;
-      $('#gu-ac').checked         = cfg.autoAC;
-      $('#gu-sm').checked         = cfg.autoSM;
-      $('#gu-cb').checked         = cfg.autoCB;
-      $('#gu-ka').checked         = cfg.keepAlive;
-      $('#gu-reload').checked     = cfg.autoReload;
-      $('#gu-reload-min').value   = cfg.reloadMinutes;
-      $('#gu-log').value          = cfg.logEach;
+      $('#gu-enabled').checked     = cfg.enabled;
+      $('#gu-ac').checked          = cfg.autoAC;
+      $('#gu-sm').checked          = cfg.autoSM;
+      $('#gu-cb').checked          = cfg.autoCB;
+      $('#gu-farm').checked        = cfg.autoFarm;
+      $('#gu-ka').checked          = cfg.keepAlive;
+      $('#gu-reload').checked      = cfg.autoReload;
+      $('#gu-reload-min').value    = cfg.reloadMinutes;
+      $('#gu-log').value           = cfg.logEach;
       updateStatsUI();
     }
     syncUI();
 
-    $('#gu-enabled').onchange    = e=>{cfg.enabled     = e.target.checked; saveConfig(); startAll();};
-    $('#gu-ac').onchange         = e=>{cfg.autoAC      = e.target.checked; saveConfig();};
-    $('#gu-sm').onchange         = e=>{cfg.autoSM      = e.target.checked; saveConfig();};
-    $('#gu-cb').onchange         = e=>{cfg.autoCB      = e.target.checked; saveConfig();};
-    $('#gu-ka').onchange         = e=>{cfg.keepAlive   = e.target.checked; saveConfig();};
-    $('#gu-reload').onchange     = e=>{
-      cfg.autoReload = e.target.checked; saveConfig(); scheduleReload();
-    };
-    $('#gu-reload-min').onchange = e=>{
-      cfg.reloadMinutes = Math.max(1,~~e.target.value);
-      saveConfig(); scheduleReload();
-    };
-    $('#gu-log').onchange        = e=>{cfg.logEach     = Math.max(0,~~e.target.value); saveConfig();};
-    $('#gu-reset').onclick       = ()=>{
+    $('#gu-enabled').onchange     = e=>{ cfg.enabled      = e.target.checked; saveConfig(); startAll(); };
+    $('#gu-ac').onchange          = e=>{ cfg.autoAC       = e.target.checked; saveConfig(); };
+    $('#gu-sm').onchange          = e=>{ cfg.autoSM       = e.target.checked; saveConfig(); };
+    $('#gu-cb').onchange          = e=>{ cfg.autoCB       = e.target.checked; saveConfig(); };
+    $('#gu-farm').onchange        = e=>{ cfg.autoFarm     = e.target.checked; saveConfig(); scheduleFarm(); };
+    $('#gu-ka').onchange          = e=>{ cfg.keepAlive    = e.target.checked; saveConfig(); };
+    $('#gu-reload').onchange      = e=>{ cfg.autoReload   = e.target.checked; saveConfig(); scheduleReload(); };
+    $('#gu-reload-min').onchange  = e=>{ cfg.reloadMinutes= Math.max(1,~~e.target.value); saveConfig(); scheduleReload(); };
+    $('#gu-log').onchange         = e=>{ cfg.logEach      = Math.max(0,~~e.target.value); saveConfig(); };
+    $('#gu-reset').onclick        = ()=>{
       Object.assign(cfg,DEF);
-      stats = {reloadCount:0, clickCount:{autoAC:0, autoSM:0, autoCB:0}};
+      stats = { reloadCount:0, clickCount:{autoAC:0,autoSM:0,autoCB:0} };
       saveConfig(); saveStats();
-      syncUI(); startAll(); console.clear();
+      syncUI(); startAll(); scheduleFarm(); console.clear();
     };
 
     gear.onclick = ()=> panel.style.display = panel.style.display==='none'?'block':'none';
