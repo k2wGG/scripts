@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GetUranium AutoBoost v2
 // @namespace    https://github.com/k2wGG
-// @version      2.5
-// @description  Автозапуск бустеров с анти-дублем, анти-429, keep-alive, авто-рефрешем и Vercel-keepalive
+// @version      2.6
+// @description  Автозапуск бустеров + анти-429 + keep-alive + Vercel-keepalive + hard-reload + статистика
 // @match        https://www.geturanium.io/*
 // @run-at       document-idle
 // @inject-into  page
@@ -11,11 +11,11 @@
 
 ;(function(){
   'use strict';
-  console.info('🚀 AutoBoost v2.5 loaded');
+  console.info('🚀 AutoBoost v2.6 loaded');
 
-  // 0. isTrusted для React
+  // 0) React isTrusted patch
   if(!Event.prototype.__ab_trusted){
-    [Event,MouseEvent].forEach(C=>{
+    [Event, MouseEvent].forEach(C=>{
       Object.defineProperty(C.prototype,'isTrusted',{
         get(){return true;}, configurable:true
       });
@@ -23,7 +23,7 @@
     Event.prototype.__ab_trusted = true;
   }
 
-  // 1. Конфиг + storage
+  // 1) Config + storage
   const DEF = {
     enabled:       true,
     autoAC:        true,
@@ -31,21 +31,40 @@
     autoCB:        true,
     keepAlive:     true,
     autoReload:    true,
-    reloadMinutes: 50,  // мин
-    logEach:       10   // сек
+    reloadMinutes: 50,   // интервал в минутах
+    logEach:       10    // секунд между логами
   };
-  const LS = 'gu-autoboost';
-  const cfg = loadConfig();
+  const LS_CFG   = 'gu-autoboost-config';
+  const LS_STATS = 'gu-autoboost-stats';
+  let cfg   = loadConfig();
+  let stats = loadStats();
+
   function loadConfig(){
-    try{ return {...DEF,...JSON.parse(localStorage.getItem(LS)||'{}')}; }
+    try{ return {...DEF, ...JSON.parse(localStorage.getItem(LS_CFG)||'{}')}; }
     catch{ return {...DEF}; }
   }
-  function save(){ localStorage.setItem(LS,JSON.stringify(cfg)); }
+  function saveConfig(){
+    localStorage.setItem(LS_CFG, JSON.stringify(cfg));
+  }
+
+  function loadStats(){
+    try{
+      return JSON.parse(sessionStorage.getItem(LS_STATS)) || {
+        reloadCount: 0,
+        clickCount: { autoAC:0, autoSM:0, autoCB:0 }
+      };
+    }catch{
+      return { reloadCount: 0, clickCount: { autoAC:0, autoSM:0, autoCB:0 } };
+    }
+  }
+  function saveStats(){
+    sessionStorage.setItem(LS_STATS, JSON.stringify(stats));
+  }
 
   // helper rnd
-  const rnd = (min,max)=>min + Math.random()*(max-min);
+  const rnd = (min,max)=> min + Math.random()*(max-min)|0;
 
-  // 2. Keep-alive: тихий fetch + события
+  // 2) Soft keep-alive
   setInterval(()=>{
     if(!cfg.keepAlive) return;
     fetch('/favicon.ico',{cache:'no-store',mode:'no-cors'}).catch(()=>{});
@@ -53,35 +72,36 @@
     document.dispatchEvent(new Event('visibilitychange'));
   }, rnd(90,120)*1000);
 
-  // 3. Перехват fetch для 429
+  // 3) Proxy fetch for 429 & 403
   let backoffUntil = 0;
   const _fetch = window.fetch.bind(window);
-  window.fetch = (...args)=>_fetch(...args).then(res=>{
+  window.fetch = (...args) => _fetch(...args).then(res=>{
     if(res.status===429){
-      backoffUntil = Date.now()+5*60*1000;
-      console.warn('[AutoBoost] 429 → пауза 5 мин');
+      backoffUntil = Date.now() + 5*60*1000;
+      console.warn('[AutoBoost] 429 → pause clicks 5m');
+    }
+    if(res.status===403){
+      console.warn('[AutoBoost] 403 → hard reload');
+      hardReload();
     }
     return res;
   });
 
-  // 4. Авто-клики бустеров
-  const LABELS = {
-    autoAC:'auto collector',
-    autoSM:'shard multiplier',
-    autoCB:'conveyor booster'
-  };
-  const timers = {}, lastClick={}, nextLog={value:Date.now()};
+  // 4) Auto-click boosters
+  const LABELS = { autoAC:'auto collector', autoSM:'shard multiplier', autoCB:'conveyor booster' };
+  const timers    = {}, lastClick = {}, nextLog = { value: Date.now() };
+
   function findBtn(key){
     return Array.from(document.querySelectorAll('button'))
-      .find(b=>b.innerText.toLowerCase().startsWith(LABELS[key]));
+      .find(b => b.innerText.toLowerCase().startsWith(LABELS[key]));
   }
   function getCooldown(btn){
     if(!btn||!btn.disabled) return 0;
     if(/activating/i.test(btn.innerText)) return 3000;
-    const m=/(\d+)\s*m.*?(\d+)\s*s/i.exec(btn.innerText);
-    return m ? (60*+m[1] + +m[2])*1000 : 600000;
+    const m = /(\d+)\s*m.*?(\d+)\s*s/i.exec(btn.innerText);
+    return m? (60*+m[1] + +m[2])*1000 : 600000;
   }
-  function clickBtn(el){
+  function doClick(el){
     ['mousedown','mouseup','click'].forEach(t=>
       el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}))
     );
@@ -89,129 +109,119 @@
   function schedule(key){
     clearTimeout(timers[key]);
     if(Date.now()<backoffUntil){
-      timers[key]=setTimeout(()=>schedule(key),backoffUntil-Date.now()+1000);
+      timers[key] = setTimeout(()=>schedule(key), backoffUntil - Date.now() + 1000);
       return;
     }
     if(!cfg.enabled){
-      timers[key]=setTimeout(()=>schedule(key),3000);
+      timers[key] = setTimeout(()=>schedule(key), 3000);
       return;
     }
-    const btn=findBtn(key), cd=getCooldown(btn);
+    const btn = findBtn(key), cd = getCooldown(btn);
     if(cd===0){
-      const since=Date.now()-(lastClick[key]||0),
-            gap=8000+rnd(0,2000);
-      if(cfg[key]&&btn&&!btn.disabled&&since>gap){
-        clickBtn(btn);
-        lastClick[key]=Date.now();
+      const since = Date.now() - (lastClick[key]||0),
+            gap   = 8000 + rnd(0,2000);
+      if(cfg[key] && btn && !btn.disabled && since>gap){
+        doClick(btn);
+        lastClick[key] = Date.now();
+        stats.clickCount[key]++; saveStats(); updateStatsUI();
         log(`⚡ ${key}`);
       }
-      timers[key]=setTimeout(()=>schedule(key),1000);
+      timers[key] = setTimeout(()=>schedule(key),1000);
     } else {
-      const delay=cd+1000+rnd(0,1500);
+      const delay = cd + 1000 + rnd(0,1500);
       log(`⏳ ${key}: ${Math.round(cd/1000)}s`);
-      timers[key]=setTimeout(()=>schedule(key),delay);
+      timers[key] = setTimeout(()=>schedule(key), delay);
     }
   }
   function startAll(){ Object.keys(LABELS).forEach(schedule); }
 
-  // 5. Авто-рефреш
+  // 5) Auto-reload with timer reset
+  let reloadTimer = null;
   function scheduleReload(){
+    if(reloadTimer) clearTimeout(reloadTimer);
     if(!cfg.autoReload) return;
-    const ms=cfg.reloadMinutes*60*1000;
-    console.info(`[AutoBoost] reload in ${cfg.reloadMinutes} min`);
-    setTimeout(()=>location.reload(),ms);
+    const ms = cfg.reloadMinutes * 60 * 1000;
+    console.info(`[AutoBoost] reload in ${cfg.reloadMinutes}m`);
+    reloadTimer = setTimeout(()=>{
+      stats.reloadCount++; saveStats(); updateStatsUI();
+      hardReload();
+    }, ms);
+  }
+  function hardReload(){
+    const url = location.pathname + '?_=' + Date.now();
+    location.replace(url);
   }
 
-  // 6. Vercel keep-alive через iframe
+  // 6) Vercel iframe keep-alive
   function scheduleVercel(){
     if(!cfg.keepAlive) return;
-    const ms=rnd(50,55)*60*1000;
-    console.info(`[AutoBoost] Vercel keepalive in ≈${Math.round(ms/60000)} min`);
+    const ms = rnd(50,55) * 60 * 1000;
+    console.info(`[AutoBoost] Vercel keepalive in ≈${Math.round(ms/60000)}m`);
     setTimeout(()=>{
-      const f=document.createElement('iframe');
-      f.style.display='none';
-      f.src='/';
+      const f = document.createElement('iframe');
+      f.style.display='none'; f.src='/';
       document.body.append(f);
       setTimeout(()=>f.remove(),15000);
       scheduleVercel();
-    },ms);
+    }, ms);
   }
 
-  // 7. Инициализация
+  // 7) Init
   function init(){
     if(!findBtn('autoAC')){
       requestAnimationFrame(init);
       return;
     }
-    console.info('✅ AutoBoost initialized');
+    console.info('✅ AutoBoost init');
     startAll();
     renderUI();
     scheduleReload();
     scheduleVercel();
   }
   if(document.readyState==='complete') init();
-  else window.addEventListener('load',init,{once:true});
-  new MutationObserver(m=>m.some(x=>x.type==='childList')&&startAll())
+  else window.addEventListener('load', init, { once:true });
+  new MutationObserver(m=> m.some(x=>x.type==='childList') && startAll())
     .observe(document.documentElement,{childList:true,subtree:true});
 
-  // 8. Логирование
+  // 8) Logging
   function log(msg){
     if(!cfg.logEach) return;
-    const now=Date.now();
-    if(now>=nextLog.value){
+    const now = Date.now();
+    if(now >= nextLog.value){
       console.log(`[AutoBoost] ${msg}`);
-      nextLog.value=now+cfg.logEach*1000;
+      nextLog.value = now + cfg.logEach*1000;
     }
   }
 
-  // 9. Мини-GUI
+  // 9) UI + stats
+  let updateStatsUI = ()=>{};  // объявляем в замыкании
+
   function renderUI(){
     if(document.querySelector('.gu-gear')) return;
-
-    // CSS
-    const css=`
-      .gu-gear {
-        position:fixed;top:12px;right:12px;
-        width:36px;height:36px;
-        background:#1b1b25dd;border-radius:50%;
-        display:flex;align-items:center;justify-content:center;
-        cursor:pointer;z-index:2147483647;
-        color:#8cf;font-size:20px;
-      }
-      .gu-gear:hover { transform:rotate(45deg); }
-      .gu-panel {
-        position:fixed;top:56px;right:12px;
-        width:300px;background:#1b1b25f2;
-        padding:12px;border-radius:8px;
-        font:13px/1.4 sans-serif;color:#cee;
-      }
-      .gu-panel hr { border-color:#444; margin:8px 0; }
-      .gu-panel .row {
-        display:flex;align-items:center;
-        justify-content:space-between;
-        margin:4px 0;
-      }
-      .gu-panel .row label { flex:1; margin-right:8px; }
-      .gu-panel input[type=number] {
-        width:60px;padding:2px 4px;
-        background:#111;color:#fee;
+    const css = `
+      .gu-gear{position:fixed;top:12px;right:12px;width:36px;height:36px;
+        background:#1b1b25dd;border-radius:50%;display:flex;align-items:center;
+        justify-content:center;cursor:pointer;z-index:9999;color:#8cf;font-size:20px;}
+      .gu-gear:hover{transform:rotate(45deg);}
+      .gu-panel{position:fixed;top:56px;right:12px;width:340px;
+        background:#1b1b25f2;padding:12px;border-radius:8px;
+        font:13px/1.4 sans-serif;color:#cee;}
+      .gu-panel hr{border-color:#444;margin:8px 0;}
+      .gu-panel .row{display:flex;align-items:center;
+        justify-content:space-between;margin:4px 0;}
+      .gu-panel .row label{flex:1;margin-right:8px;}
+      .gu-panel input[type=number]{
+        width:60px;padding:2px 4px;background:#111;color:#fee;
         border:1px solid #555;border-radius:4px;
-        -moz-appearance:textfield;appearance:none;
-      }
-      .gu-panel input[type=number]::-webkit-inner-spin-button,
-      .gu-panel input[type=number]::-webkit-outer-spin-button {
-        -webkit-appearance:none;margin:0;
-      }
-      .gu-panel button {
-        width:100%;margin-top:8px;
-        padding:6px 0;
-        background:#444;border:none;border-radius:4px;
-        color:#eee;cursor:pointer;
-      }
+        -moz-appearance:textfield;appearance:none;}
+      .gu-panel input::-webkit-inner-spin-button,
+      .gu-panel input::-webkit-outer-spin-button{
+        -webkit-appearance:none;margin:0;}
+      .gu-panel button{width:100%;margin-top:8px;padding:6px 0;
+        background:#444;border:none;border-radius:4px;color:#eee;cursor:pointer;}
+      .stat-value{font-weight:bold;}
     `;
-
-    // HTML
-    const html=`
+    const html = `
       <div class="gu-gear">⚙️</div>
       <div class="gu-panel" style="display:none">
         <div class="row"><label><input id="gu-enabled" type="checkbox"> Enable All</label></div><hr/>
@@ -221,45 +231,69 @@
         <div class="row"><label><input id="gu-ka" type="checkbox"> keepAlive</label></div>
         <div class="row"><label><input id="gu-reload" type="checkbox"> autoReload</label></div>
         <div class="row">
-          <label for="gu-reload-min">Reload Interval</label>
-          <input id="gu-reload-min" type="number" min="1"/> <span>min</span>
+          <label for="gu-reload-min">Reload Interval (min)</label>
+          <input id="gu-reload-min" type="number" min="1"/>
         </div><hr/>
         <div class="row">
-          <label for="gu-log">Log Every</label>
-          <input id="gu-log" type="number" min="0"/> <span>s</span>
-        </div>
+          <label for="gu-log">Log Every (s)</label>
+          <input id="gu-log" type="number" min="0"/>
+        </div><hr/>
+        <div class="row"><label>Reload Count</label><div id="stat-reloads" class="stat-value">0</div></div>
+        <div class="row"><label>Collector Clicks</label><div id="stat-autoAC" class="stat-value">0</div></div>
+        <div class="row"><label>Shard Clicks</label><div id="stat-autoSM" class="stat-value">0</div></div>
+        <div class="row"><label>Booster Clicks</label><div id="stat-autoCB" class="stat-value">0</div></div><hr/>
         <button id="gu-reset">Reset to Defaults</button>
       </div>
     `;
     document.head.insertAdjacentHTML('beforeend',`<style>${css}</style>`);
     document.body.insertAdjacentHTML('beforeend',html);
 
-    const $=s=>document.querySelector(s),
-          gear=$('.gu-gear'),
-          panel=$('.gu-panel');
+    const $     = s=>document.querySelector(s),
+          gear  = $('.gu-gear'),
+          panel = $('.gu-panel');
+
+    // определяем updateStatsUI в этой области, но в замыкании
+    updateStatsUI = ()=>{
+      $('#stat-reloads').textContent = stats.reloadCount;
+      $('#stat-autoAC').textContent   = stats.clickCount.autoAC;
+      $('#stat-autoSM').textContent   = stats.clickCount.autoSM;
+      $('#stat-autoCB').textContent   = stats.clickCount.autoCB;
+    };
 
     function syncUI(){
-      $('#gu-enabled').checked    =cfg.enabled;
-      $('#gu-ac').checked         =cfg.autoAC;
-      $('#gu-sm').checked         =cfg.autoSM;
-      $('#gu-cb').checked         =cfg.autoCB;
-      $('#gu-ka').checked         =cfg.keepAlive;
-      $('#gu-reload').checked     =cfg.autoReload;
-      $('#gu-reload-min').value   =cfg.reloadMinutes;
-      $('#gu-log').value          =cfg.logEach;
+      $('#gu-enabled').checked    = cfg.enabled;
+      $('#gu-ac').checked         = cfg.autoAC;
+      $('#gu-sm').checked         = cfg.autoSM;
+      $('#gu-cb').checked         = cfg.autoCB;
+      $('#gu-ka').checked         = cfg.keepAlive;
+      $('#gu-reload').checked     = cfg.autoReload;
+      $('#gu-reload-min').value   = cfg.reloadMinutes;
+      $('#gu-log').value          = cfg.logEach;
+      updateStatsUI();
     }
     syncUI();
 
-    $('#gu-enabled').onchange    =e=>{cfg.enabled     =e.target.checked; save(); startAll();};
-    $('#gu-ac').onchange         =e=>{cfg.autoAC      =e.target.checked; save();};
-    $('#gu-sm').onchange         =e=>{cfg.autoSM      =e.target.checked; save();};
-    $('#gu-cb').onchange         =e=>{cfg.autoCB      =e.target.checked; save();};
-    $('#gu-ka').onchange         =e=>{cfg.keepAlive   =e.target.checked; save();};
-    $('#gu-reload').onchange     =e=>{cfg.autoReload  =e.target.checked; save();};
-    $('#gu-reload-min').onchange =e=>{cfg.reloadMinutes=Math.max(1,~~e.target.value); save();};
-    $('#gu-log').onchange        =e=>{cfg.logEach     =Math.max(0,~~e.target.value); save();};
-    $('#gu-reset').onclick       =()=>{Object.assign(cfg,DEF); save(); syncUI(); startAll(); console.clear();};
+    $('#gu-enabled').onchange    = e=>{cfg.enabled     = e.target.checked; saveConfig(); startAll();};
+    $('#gu-ac').onchange         = e=>{cfg.autoAC      = e.target.checked; saveConfig();};
+    $('#gu-sm').onchange         = e=>{cfg.autoSM      = e.target.checked; saveConfig();};
+    $('#gu-cb').onchange         = e=>{cfg.autoCB      = e.target.checked; saveConfig();};
+    $('#gu-ka').onchange         = e=>{cfg.keepAlive   = e.target.checked; saveConfig();};
+    $('#gu-reload').onchange     = e=>{
+      cfg.autoReload = e.target.checked; saveConfig(); scheduleReload();
+    };
+    $('#gu-reload-min').onchange = e=>{
+      cfg.reloadMinutes = Math.max(1,~~e.target.value);
+      saveConfig(); scheduleReload();
+    };
+    $('#gu-log').onchange        = e=>{cfg.logEach     = Math.max(0,~~e.target.value); saveConfig();};
+    $('#gu-reset').onclick       = ()=>{
+      Object.assign(cfg,DEF);
+      stats = {reloadCount:0, clickCount:{autoAC:0, autoSM:0, autoCB:0}};
+      saveConfig(); saveStats();
+      syncUI(); startAll(); console.clear();
+    };
 
-    gear.onclick =()=> panel.style.display = panel.style.display==='none' ? 'block' : 'none';
+    gear.onclick = ()=> panel.style.display = panel.style.display==='none'?'block':'none';
   }
+
 })();
