@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         GetUranium AutoBoost v2 (UI‑edition, 2024‑05 fix)
+// @name         GetUranium AutoBoost v2 (UI-edition, anti-429+reload)
 // @namespace    https://github.com/k2wGG
-// @version      2.3
-// @description  Автозапуск трёх бустеров + шестерёнка‑GUI + «мягкий» keep‑alive
+// @version      2.4
+// @description  Автозапуск бустеров c анти-дублем, анти-429, keep-alive и авто-рефрешем
 // @match        https://www.geturanium.io/*
 // @run-at       document-idle
 // @inject-into  page
@@ -11,183 +11,232 @@
 
 ;(function () {
   'use strict';
-  console.info('🚀 AutoBoost v2.3 loaded');
+  console.info('🚀 AutoBoost v2.4 loaded');
 
-  /*────────── 0. Patched isTrusted (для React) ─────────*/
-  if (!Event.prototype.__ab_isTrustedPatched) {
+  /*──── 0. isTrusted для React ────*/
+  if (!Event.prototype.__ab_trusted) {
     [Event, MouseEvent].forEach(C =>
       Object.defineProperty(C.prototype, 'isTrusted', {
-        get () { return true }, configurable: true
+        get() { return true },
+        configurable: true
       })
     );
-    Event.prototype.__ab_isTrustedPatched = true;
+    Event.prototype.__ab_trusted = true;
   }
 
-  /*────────── 1. Конфигурация / storage ─────────*/
+  /*──── 1. Конфиг + storage ────*/
   const DEF = {
-    enabled   : true,
-    autoAC    : true,
-    autoSM    : true,
-    autoCB    : true,
-    logEach   : 10,     // c
-    keepAlive : true    // <-- можно выключить в UI
+    enabled:    true,
+    autoAC:     true,
+    autoSM:     true,
+    autoCB:     true,
+    keepAlive:  true,
+    autoReload: true,
+    logEach:    10    // секунд между логами
   };
-  const LS_KEY = 'gu-autoboost';
-  const cfg = load();
-  const save = () => localStorage.setItem(LS_KEY, JSON.stringify(cfg));
+  const LS = 'gu-autoboost';
+  const cfg = loadConfig();
+  const save = () => localStorage.setItem(LS, JSON.stringify(cfg));
 
-  function load() {
-    try { return { ...DEF, ...JSON.parse(localStorage.getItem(LS_KEY)||'{}') } }
+  function loadConfig() {
+    try { return { ...DEF, ...JSON.parse(localStorage.getItem(LS) || '{}') } }
     catch { return { ...DEF } }
   }
 
-  /*────────── 2. «Мягкий» keep‑alive ─────────*/
-  const PING = '/favicon.ico';   // отдают 200 и никого не триггерят
-  const rnd  = (min,max)=>Math.random()*(max-min)+min;
+  /*──── 2. Функции помощники ────*/
+  const rnd = (min, max) => min + Math.random() * (max - min);
 
+  /*──── 3. Keep-alive ────*/
   setInterval(() => {
     if (!cfg.keepAlive) return;
-    fetch(PING, { cache:'no-store', mode:'no-cors' }).catch(()=>{});
-    /* лёгкое «шевеление» курсора / вкладки */
-    document.dispatchEvent(new MouseEvent('mousemove', { bubbles:true }));
+    fetch('/favicon.ico', { cache: 'no-store', mode: 'no-cors' }).catch(() => {});
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
     document.dispatchEvent(new Event('visibilitychange'));
-  }, rnd(45,70)*1e3);   // 45‑70 с, чтобы не стучать с чётким периодом
+  }, rnd(90, 120) * 1e3);
 
-  /*────────── 3. Логика бустеров ─────────*/
+  /*──── 4. Перехват fetch для 429 ────*/
+  let backoffUntil = 0;
+  const _fetch = window.fetch.bind(window);
+  window.fetch = (...args) => _fetch(...args).then(res => {
+    if (res.status === 429) {
+      backoffUntil = Date.now() + 5 * 60e3;
+      console.warn('[AutoBoost] 429 received, pausing clicks for 5 min');
+    }
+    return res;
+  }).catch(err => Promise.reject(err));
+
+  /*──── 5. Автоклики бустеров ────*/
   const LABEL = {
-    autoAC : 'auto collector',
-    autoSM : 'shard multiplier',
-    autoCB : 'conveyor booster'
+    autoAC: 'auto collector',
+    autoSM: 'shard multiplier',
+    autoCB: 'conveyor booster'
   };
-  const timers = {}, nextLog = {value:Date.now()};
+  const timers    = {};
+  const lastClick = {};
+  const nextLog   = { value: Date.now() };
 
-  const buttons = () => [...document.querySelectorAll('button')];
-  const findBtn = f => buttons().find(b => b.innerText.toLowerCase().startsWith(LABEL[f]));
-
-  /** сколько мс осталось до конца кулдауна */
-  function getRestMs(btn){
-    if (!btn || !btn.disabled) return 0;              // активен
-    /* если ещё «Activating…» — ждём 3 с, не спамим сервер */
-    if (/activating/i.test(btn.innerText)) return 3_000;
-
-    const m = /(\d+)\s*m.*?(\d+)\s*s/i.exec(btn.innerText);
-    return m ? (60*+m[1] + +m[2])*1e3 : 600e3;        // иначе «NN m NN s» или fallback 10 мин
+  function buttons() { return Array.from(document.querySelectorAll('button')); }
+  function findBtn(key) {
+    const label = LABEL[key];
+    return buttons().find(b => b.innerText.toLowerCase().startsWith(label));
   }
 
-  const simulateClick = el =>
-    ['mousedown','mouseup','click'].forEach(t =>
-      el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}))
+  function restMs(btn) {
+    if (!btn || !btn.disabled) return 0;
+    if (/activating/i.test(btn.innerText)) return 3_000;
+    const m = /(\d+)\s*m.*?(\d+)\s*s/i.exec(btn.innerText);
+    return m ? (60 * +m[1] + +m[2]) * 1e3 : 600e3;
+  }
+
+  function doClick(el) {
+    ['mousedown', 'mouseup', 'click'].forEach(type =>
+      el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
     );
+  }
 
-  function schedule(flag){
-    clearTimeout(timers[flag]);
-    if (!cfg.enabled){ timers[flag]=setTimeout(()=>schedule(flag),3e3); return }
+  function schedule(key) {
+    clearTimeout(timers[key]);
 
-    const btn=findBtn(flag), rest=getRestMs(btn);
-
-    /* кулдауна нет → пробуем клик */
-    if (rest===0){
-      if (cfg[flag] && btn && !btn.disabled){
-        simulateClick(btn);
-        log(`⚡ click «${flag}»`);
-      }
-      timers[flag]=setTimeout(()=>schedule(flag),1e3);
+    // пауза после 429
+    if (Date.now() < backoffUntil) {
+      const wait = backoffUntil - Date.now() + 1e3;
+      timers[key] = setTimeout(() => schedule(key), wait);
       return;
     }
 
-    log(`⏳ ${flag}: ${Math.round(rest/1e3)} s left`);
-    timers[flag]=setTimeout(()=>schedule(flag),rest+1e3);
+    if (!cfg.enabled) {
+      timers[key] = setTimeout(() => schedule(key), 3e3);
+      return;
+    }
+
+    const btn = findBtn(key), rem = restMs(btn);
+
+    if (rem === 0) {
+      const since = Date.now() - (lastClick[key] || 0);
+      const minGap = 8e3 + rnd(0, 2e3); // 8–10 с анти-дубль
+      if (cfg[key] && btn && !btn.disabled && since > minGap) {
+        doClick(btn);
+        lastClick[key] = Date.now();
+        log(`⚡ clicked «${key}»`);
+      }
+      timers[key] = setTimeout(() => schedule(key), 1e3);
+      return;
+    }
+
+    const delay = rem + 1e3 + rnd(0, 1500); // +1–2.5 с джиттера
+    log(`⏳ ${key}: ${Math.round(rem/1e3)} s left`);
+    timers[key] = setTimeout(() => schedule(key), delay);
   }
-  const startAll = () => Object.keys(LABEL).forEach(schedule);
 
-  /*────────── 4. Инициализация + перерендеры ─────────*/
-  const init = () => {
-    if (!findBtn('autoAC')) { requestAnimationFrame(init); return }
+  function startAll() {
+    Object.keys(LABEL).forEach(schedule);
+  }
+
+  /*──── 6. Авто-рефреш ≈50 мин ────*/
+  function scheduleReload() {
+    if (!cfg.autoReload) return;
+    const ms = rnd(48, 52) * 60e3; // 48–52 мин
+    console.info(`[AutoBoost] reload in ≈${Math.round(ms/6e4)} min`);
+    setTimeout(() => window.location.reload(), ms);
+  }
+
+  /*──── 7. Инициализация ────*/
+  function init() {
+    if (!findBtn('autoAC')) {
+      requestAnimationFrame(init);
+      return;
+    }
     console.info('✅ AutoBoost initialised');
-    startAll(); ensureUI();
-  };
-  document.readyState==='complete'
-    ? init()
-    : window.addEventListener('load', init, {once:true});
+    startAll();
+    ensureUI();
+    scheduleReload();
+  }
 
-  new MutationObserver(m=>{ if(m.some(x=>x.type==='childList')) startAll() })
-      .observe(document.documentElement,{childList:true,subtree:true});
+  if (document.readyState === 'complete') init();
+  else window.addEventListener('load', init, { once: true });
 
-  /*────────── 5. Логирование ─────────*/
-  function log(str){
-    if(!cfg.logEach) return;
-    const now=Date.now();
-    if(now>=nextLog.value){
-      console.log(`[AutoBoost] ${str}`);
-      nextLog.value = now + cfg.logEach*1e3;
+  new MutationObserver(m => {
+    if (m.some(x => x.type === 'childList')) startAll();
+  }).observe(document.documentElement, { childList: true, subtree: true });
+
+  /*──── 8. Логирование ────*/
+  function log(msg) {
+    if (!cfg.logEach) return;
+    const now = Date.now();
+    if (now >= nextLog.value) {
+      console.log(`[AutoBoost] ${msg}`);
+      nextLog.value = now + cfg.logEach * 1e3;
     }
   }
 
-  /*────────── 6. Мини‑GUI ─────────*/
-  function ensureUI(){
+  /*──── 9. UI ────*/
+  function ensureUI() {
     if (document.querySelector('.gu-gear')) return;
 
     const css = `
-.gu-gear{position:fixed;top:12px;right:12px;width:36px;height:36px;
-  background:#1b1b25dd;border-radius:50%;display:flex;align-items:center;
-  justify-content:center;cursor:pointer;z-index:2147483647;
-  color:#8cf;font-size:20px;user-select:none;transition:transform .3s}
-.gu-gear:hover{transform:rotate(60deg)}
-.gu-panel{position:fixed;top:56px;right:12px;width:240px;background:#1b1b25f2;
-  padding:12px 14px;border-radius:8px;font:13px/1.4 sans-serif;
-  color:#cee;box-shadow:0 4px 12px #000b;z-index:2147483647;
-  backdrop-filter:blur(4px)}
-.gu-panel hr{border-color:#444;margin:6px -14px}
-.gu-panel input[type=number]{width:60px;margin-left:4px;background:#111;
-  color:#fee;border:1px solid #555;border-radius:4px;padding:2px 4px}
-.gu-panel label{display:block;margin:5px 0}
-.gu-panel button{margin-top:6px;padding:2px 8px;background:#444;border:0;
-  border-radius:4px;color:#eee;cursor:pointer}`;
+      .gu-gear{position:fixed;top:12px;right:12px;width:36px;height:36px;
+        background:#1b1b25dd;border-radius:50%;display:flex;align-items:center;
+        justify-content:center;cursor:pointer;z-index:2147483647;
+        color:#8cf;font-size:20px;user-select:none;transition:transform .3s}
+      .gu-gear:hover{transform:rotate(60deg)}
+      .gu-panel{position:fixed;top:56px;right:12px;width:260px;background:#1b1b25f2;
+        padding:12px 14px;border-radius:8px;font:13px/1.4 sans-serif;
+        color:#cee;box-shadow:0 4px 12px #000b;z-index:2147483647;
+        backdrop-filter:blur(4px)}
+      .gu-panel hr{border-color:#444;margin:6px -14px}
+      .gu-panel input[type=number]{width:60px;margin-left:4px;background:#111;color:#fee;
+        border:1px solid #555;border-radius:4px;padding:2px 4px}
+      .gu-panel label{display:block;margin:5px 0}
+      .gu-panel button{margin-top:6px;padding:2px 8px;background:#444;border:0;
+        border-radius:4px;color:#eee;cursor:pointer}`;
     const html = `
-<div class="gu-gear" title="AutoBoost settings">⚙️</div>
-<div class="gu-panel" style="display:none">
-  <label><input type="checkbox" id="gu-enabled"> script enabled</label><hr>
-  <label><input type="checkbox" id="gu-ac"> Auto Collector</label>
-  <label><input type="checkbox" id="gu-sm"> Shard Multiplier</label>
-  <label><input type="checkbox" id="gu-cb"> Conveyor Booster</label><hr>
-  keep‑alive <input type="checkbox" id="gu-ka"><br>
-  log each <input type="number" id="gu-log" min="0" step="1"> s
-  <button id="gu-reset">reset</button>
-</div>`;
+      <div class="gu-gear" title="AutoBoost settings">⚙️</div>
+      <div class="gu-panel" style="display:none">
+        <label><input type="checkbox" id="gu-enabled"> script enabled</label><hr>
+        <label><input type="checkbox" id="gu-ac"> Auto Collector</label>
+        <label><input type="checkbox" id="gu-sm"> Shard Multiplier</label>
+        <label><input type="checkbox" id="gu-cb"> Conveyor Booster</label><hr>
+        <label><input type="checkbox" id="gu-ka"> keep-alive</label>
+        <label><input type="checkbox" id="gu-reload"> auto-reload ≈50 min</label><hr>
+        log each <input type="number" id="gu-log" min="0" step="1"> s
+        <button id="gu-reset">reset</button>
+      </div>`;
 
     document.head.insertAdjacentHTML('beforeend', `<style>${css}</style>`);
     document.body.insertAdjacentHTML('beforeend', html);
 
-    const $ = s=>document.querySelector(s),
-          gear = $('.gu-gear'),
-          pnl  = $('.gu-panel');
+    const $    = sel => document.querySelector(sel);
+    const gear = $('.gu-gear');
+    const pnl  = $('.gu-panel');
 
-    const sync = () => {
-      $('#gu-enabled').checked = cfg.enabled;
-      $('#gu-ka').checked      = cfg.keepAlive;
-      $('#gu-ac').checked      = cfg.autoAC;
-      $('#gu-sm').checked      = cfg.autoSM;
-      $('#gu-cb').checked      = cfg.autoCB;
-      $('#gu-log').value       = cfg.logEach;
-    }; sync();
+    function syncUI() {
+      $('#gu-enabled').checked  = cfg.enabled;
+      $('#gu-ac').checked       = cfg.autoAC;
+      $('#gu-sm').checked       = cfg.autoSM;
+      $('#gu-cb').checked       = cfg.autoCB;
+      $('#gu-ka').checked       = cfg.keepAlive;
+      $('#gu-reload').checked   = cfg.autoReload;
+      $('#gu-log').value        = cfg.logEach;
+    }
+    syncUI();
 
-    /* события UI */
-    $('#gu-enabled').onchange = e=>{cfg.enabled   = e.target.checked;save();startAll()};
-    $('#gu-ka').onchange      = e=>{cfg.keepAlive = e.target.checked;save()};
-    $('#gu-ac').onchange      = e=>{cfg.autoAC    = e.target.checked;save()};
-    $('#gu-sm').onchange      = e=>{cfg.autoSM    = e.target.checked;save()};
-    $('#gu-cb').onchange      = e=>{cfg.autoCB    = e.target.checked;save()};
-    $('#gu-log').onchange     = e=>{cfg.logEach   = Math.max(0,~~e.target.value);save()};
-    $('#gu-reset').onclick    = ()=>{Object.assign(cfg,DEF);save();sync();startAll();console.clear()};
+    $('#gu-enabled').onchange = e => { cfg.enabled   = e.target.checked; save(); startAll(); };
+    $('#gu-ac').onchange      = e => { cfg.autoAC    = e.target.checked; save(); };
+    $('#gu-sm').onchange      = e => { cfg.autoSM    = e.target.checked; save(); };
+    $('#gu-cb').onchange      = e => { cfg.autoCB    = e.target.checked; save(); };
+    $('#gu-ka').onchange      = e => { cfg.keepAlive = e.target.checked; save(); };
+    $('#gu-reload').onchange  = e => { cfg.autoReload= e.target.checked; save(); };
+    $('#gu-log').onchange     = e => { cfg.logEach   = Math.max(0,~~e.target.value); save(); };
+    $('#gu-reset').onclick    = () => { Object.assign(cfg, DEF); save(); syncUI(); startAll(); console.clear(); };
 
-    const toggle = () => pnl.style.display = pnl.style.display==='none' ? 'block' : 'none';
-    gear.onclick = toggle;
-    window.addEventListener('keydown',e=>{
-      if(e.altKey && e.key.toLowerCase()==='g'){e.preventDefault();toggle()}
+    const togglePanel = () => pnl.style.display = pnl.style.display === 'none' ? 'block' : 'none';
+    gear.onclick = togglePanel;
+    window.addEventListener('keydown', e => {
+      if (e.altKey && e.key.toLowerCase() === 'g') { e.preventDefault(); togglePanel(); }
     });
 
-    /* если React сотрёт DOM, вернём UI назад */
-    new MutationObserver(()=>setTimeout(ensureUI,0))
-      .observe(document.body,{childList:true});
+    // следим, чтобы React не удалил нашу панель
+    new MutationObserver(() => setTimeout(ensureUI, 0))
+      .observe(document.body, { childList: true });
   }
 })();
