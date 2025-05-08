@@ -1,242 +1,265 @@
 // ==UserScript==
-// @name         GetUranium AutoBoost v2 (UI-edition, anti-429+reload)
+// @name         GetUranium AutoBoost v2
 // @namespace    https://github.com/k2wGG
-// @version      2.4
-// @description  Автозапуск бустеров c анти-дублем, анти-429, keep-alive и авто-рефрешем
+// @version      2.5
+// @description  Автозапуск бустеров с анти-дублем, анти-429, keep-alive, авто-рефрешем и Vercel-keepalive
 // @match        https://www.geturanium.io/*
 // @run-at       document-idle
 // @inject-into  page
 // @grant        none
 // ==/UserScript==
 
-;(function () {
+;(function(){
   'use strict';
-  console.info('🚀 AutoBoost v2.4 loaded');
+  console.info('🚀 AutoBoost v2.5 loaded');
 
-  /*──── 0. isTrusted для React ────*/
-  if (!Event.prototype.__ab_trusted) {
-    [Event, MouseEvent].forEach(C =>
-      Object.defineProperty(C.prototype, 'isTrusted', {
-        get() { return true },
-        configurable: true
-      })
-    );
+  // 0. isTrusted для React
+  if(!Event.prototype.__ab_trusted){
+    [Event,MouseEvent].forEach(C=>{
+      Object.defineProperty(C.prototype,'isTrusted',{
+        get(){return true;}, configurable:true
+      });
+    });
     Event.prototype.__ab_trusted = true;
   }
 
-  /*──── 1. Конфиг + storage ────*/
+  // 1. Конфиг + storage
   const DEF = {
-    enabled:    true,
-    autoAC:     true,
-    autoSM:     true,
-    autoCB:     true,
-    keepAlive:  true,
-    autoReload: true,
-    logEach:    10    // секунд между логами
+    enabled:       true,
+    autoAC:        true,
+    autoSM:        true,
+    autoCB:        true,
+    keepAlive:     true,
+    autoReload:    true,
+    reloadMinutes: 50,  // мин
+    logEach:       10   // сек
   };
   const LS = 'gu-autoboost';
   const cfg = loadConfig();
-  const save = () => localStorage.setItem(LS, JSON.stringify(cfg));
-
-  function loadConfig() {
-    try { return { ...DEF, ...JSON.parse(localStorage.getItem(LS) || '{}') } }
-    catch { return { ...DEF } }
+  function loadConfig(){
+    try{ return {...DEF,...JSON.parse(localStorage.getItem(LS)||'{}')}; }
+    catch{ return {...DEF}; }
   }
+  function save(){ localStorage.setItem(LS,JSON.stringify(cfg)); }
 
-  /*──── 2. Функции помощники ────*/
-  const rnd = (min, max) => min + Math.random() * (max - min);
+  // helper rnd
+  const rnd = (min,max)=>min + Math.random()*(max-min);
 
-  /*──── 3. Keep-alive ────*/
-  setInterval(() => {
-    if (!cfg.keepAlive) return;
-    fetch('/favicon.ico', { cache: 'no-store', mode: 'no-cors' }).catch(() => {});
-    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+  // 2. Keep-alive: тихий fetch + события
+  setInterval(()=>{
+    if(!cfg.keepAlive) return;
+    fetch('/favicon.ico',{cache:'no-store',mode:'no-cors'}).catch(()=>{});
+    document.dispatchEvent(new MouseEvent('mousemove',{bubbles:true}));
     document.dispatchEvent(new Event('visibilitychange'));
-  }, rnd(90, 120) * 1e3);
+  }, rnd(90,120)*1000);
 
-  /*──── 4. Перехват fetch для 429 ────*/
+  // 3. Перехват fetch для 429
   let backoffUntil = 0;
   const _fetch = window.fetch.bind(window);
-  window.fetch = (...args) => _fetch(...args).then(res => {
-    if (res.status === 429) {
-      backoffUntil = Date.now() + 5 * 60e3;
-      console.warn('[AutoBoost] 429 received, pausing clicks for 5 min');
+  window.fetch = (...args)=>_fetch(...args).then(res=>{
+    if(res.status===429){
+      backoffUntil = Date.now()+5*60*1000;
+      console.warn('[AutoBoost] 429 → пауза 5 мин');
     }
     return res;
-  }).catch(err => Promise.reject(err));
+  });
 
-  /*──── 5. Автоклики бустеров ────*/
-  const LABEL = {
-    autoAC: 'auto collector',
-    autoSM: 'shard multiplier',
-    autoCB: 'conveyor booster'
+  // 4. Авто-клики бустеров
+  const LABELS = {
+    autoAC:'auto collector',
+    autoSM:'shard multiplier',
+    autoCB:'conveyor booster'
   };
-  const timers    = {};
-  const lastClick = {};
-  const nextLog   = { value: Date.now() };
-
-  function buttons() { return Array.from(document.querySelectorAll('button')); }
-  function findBtn(key) {
-    const label = LABEL[key];
-    return buttons().find(b => b.innerText.toLowerCase().startsWith(label));
+  const timers = {}, lastClick={}, nextLog={value:Date.now()};
+  function findBtn(key){
+    return Array.from(document.querySelectorAll('button'))
+      .find(b=>b.innerText.toLowerCase().startsWith(LABELS[key]));
   }
-
-  function restMs(btn) {
-    if (!btn || !btn.disabled) return 0;
-    if (/activating/i.test(btn.innerText)) return 3_000;
-    const m = /(\d+)\s*m.*?(\d+)\s*s/i.exec(btn.innerText);
-    return m ? (60 * +m[1] + +m[2]) * 1e3 : 600e3;
+  function getCooldown(btn){
+    if(!btn||!btn.disabled) return 0;
+    if(/activating/i.test(btn.innerText)) return 3000;
+    const m=/(\d+)\s*m.*?(\d+)\s*s/i.exec(btn.innerText);
+    return m ? (60*+m[1] + +m[2])*1000 : 600000;
   }
-
-  function doClick(el) {
-    ['mousedown', 'mouseup', 'click'].forEach(type =>
-      el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }))
+  function clickBtn(el){
+    ['mousedown','mouseup','click'].forEach(t=>
+      el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}))
     );
   }
-
-  function schedule(key) {
+  function schedule(key){
     clearTimeout(timers[key]);
-
-    // пауза после 429
-    if (Date.now() < backoffUntil) {
-      const wait = backoffUntil - Date.now() + 1e3;
-      timers[key] = setTimeout(() => schedule(key), wait);
+    if(Date.now()<backoffUntil){
+      timers[key]=setTimeout(()=>schedule(key),backoffUntil-Date.now()+1000);
       return;
     }
-
-    if (!cfg.enabled) {
-      timers[key] = setTimeout(() => schedule(key), 3e3);
+    if(!cfg.enabled){
+      timers[key]=setTimeout(()=>schedule(key),3000);
       return;
     }
-
-    const btn = findBtn(key), rem = restMs(btn);
-
-    if (rem === 0) {
-      const since = Date.now() - (lastClick[key] || 0);
-      const minGap = 8e3 + rnd(0, 2e3); // 8–10 с анти-дубль
-      if (cfg[key] && btn && !btn.disabled && since > minGap) {
-        doClick(btn);
-        lastClick[key] = Date.now();
-        log(`⚡ clicked «${key}»`);
+    const btn=findBtn(key), cd=getCooldown(btn);
+    if(cd===0){
+      const since=Date.now()-(lastClick[key]||0),
+            gap=8000+rnd(0,2000);
+      if(cfg[key]&&btn&&!btn.disabled&&since>gap){
+        clickBtn(btn);
+        lastClick[key]=Date.now();
+        log(`⚡ ${key}`);
       }
-      timers[key] = setTimeout(() => schedule(key), 1e3);
-      return;
+      timers[key]=setTimeout(()=>schedule(key),1000);
+    } else {
+      const delay=cd+1000+rnd(0,1500);
+      log(`⏳ ${key}: ${Math.round(cd/1000)}s`);
+      timers[key]=setTimeout(()=>schedule(key),delay);
     }
+  }
+  function startAll(){ Object.keys(LABELS).forEach(schedule); }
 
-    const delay = rem + 1e3 + rnd(0, 1500); // +1–2.5 с джиттера
-    log(`⏳ ${key}: ${Math.round(rem/1e3)} s left`);
-    timers[key] = setTimeout(() => schedule(key), delay);
+  // 5. Авто-рефреш
+  function scheduleReload(){
+    if(!cfg.autoReload) return;
+    const ms=cfg.reloadMinutes*60*1000;
+    console.info(`[AutoBoost] reload in ${cfg.reloadMinutes} min`);
+    setTimeout(()=>location.reload(),ms);
   }
 
-  function startAll() {
-    Object.keys(LABEL).forEach(schedule);
+  // 6. Vercel keep-alive через iframe
+  function scheduleVercel(){
+    if(!cfg.keepAlive) return;
+    const ms=rnd(50,55)*60*1000;
+    console.info(`[AutoBoost] Vercel keepalive in ≈${Math.round(ms/60000)} min`);
+    setTimeout(()=>{
+      const f=document.createElement('iframe');
+      f.style.display='none';
+      f.src='/';
+      document.body.append(f);
+      setTimeout(()=>f.remove(),15000);
+      scheduleVercel();
+    },ms);
   }
 
-  /*──── 6. Авто-рефреш ≈50 мин ────*/
-  function scheduleReload() {
-    if (!cfg.autoReload) return;
-    const ms = rnd(48, 52) * 60e3; // 48–52 мин
-    console.info(`[AutoBoost] reload in ≈${Math.round(ms/6e4)} min`);
-    setTimeout(() => window.location.reload(), ms);
-  }
-
-  /*──── 7. Инициализация ────*/
-  function init() {
-    if (!findBtn('autoAC')) {
+  // 7. Инициализация
+  function init(){
+    if(!findBtn('autoAC')){
       requestAnimationFrame(init);
       return;
     }
-    console.info('✅ AutoBoost initialised');
+    console.info('✅ AutoBoost initialized');
     startAll();
-    ensureUI();
+    renderUI();
     scheduleReload();
+    scheduleVercel();
   }
+  if(document.readyState==='complete') init();
+  else window.addEventListener('load',init,{once:true});
+  new MutationObserver(m=>m.some(x=>x.type==='childList')&&startAll())
+    .observe(document.documentElement,{childList:true,subtree:true});
 
-  if (document.readyState === 'complete') init();
-  else window.addEventListener('load', init, { once: true });
-
-  new MutationObserver(m => {
-    if (m.some(x => x.type === 'childList')) startAll();
-  }).observe(document.documentElement, { childList: true, subtree: true });
-
-  /*──── 8. Логирование ────*/
-  function log(msg) {
-    if (!cfg.logEach) return;
-    const now = Date.now();
-    if (now >= nextLog.value) {
+  // 8. Логирование
+  function log(msg){
+    if(!cfg.logEach) return;
+    const now=Date.now();
+    if(now>=nextLog.value){
       console.log(`[AutoBoost] ${msg}`);
-      nextLog.value = now + cfg.logEach * 1e3;
+      nextLog.value=now+cfg.logEach*1000;
     }
   }
 
-  /*──── 9. UI ────*/
-  function ensureUI() {
-    if (document.querySelector('.gu-gear')) return;
+  // 9. Мини-GUI
+  function renderUI(){
+    if(document.querySelector('.gu-gear')) return;
 
-    const css = `
-      .gu-gear{position:fixed;top:12px;right:12px;width:36px;height:36px;
-        background:#1b1b25dd;border-radius:50%;display:flex;align-items:center;
-        justify-content:center;cursor:pointer;z-index:2147483647;
-        color:#8cf;font-size:20px;user-select:none;transition:transform .3s}
-      .gu-gear:hover{transform:rotate(60deg)}
-      .gu-panel{position:fixed;top:56px;right:12px;width:260px;background:#1b1b25f2;
-        padding:12px 14px;border-radius:8px;font:13px/1.4 sans-serif;
-        color:#cee;box-shadow:0 4px 12px #000b;z-index:2147483647;
-        backdrop-filter:blur(4px)}
-      .gu-panel hr{border-color:#444;margin:6px -14px}
-      .gu-panel input[type=number]{width:60px;margin-left:4px;background:#111;color:#fee;
-        border:1px solid #555;border-radius:4px;padding:2px 4px}
-      .gu-panel label{display:block;margin:5px 0}
-      .gu-panel button{margin-top:6px;padding:2px 8px;background:#444;border:0;
-        border-radius:4px;color:#eee;cursor:pointer}`;
-    const html = `
-      <div class="gu-gear" title="AutoBoost settings">⚙️</div>
+    // CSS
+    const css=`
+      .gu-gear {
+        position:fixed;top:12px;right:12px;
+        width:36px;height:36px;
+        background:#1b1b25dd;border-radius:50%;
+        display:flex;align-items:center;justify-content:center;
+        cursor:pointer;z-index:2147483647;
+        color:#8cf;font-size:20px;
+      }
+      .gu-gear:hover { transform:rotate(45deg); }
+      .gu-panel {
+        position:fixed;top:56px;right:12px;
+        width:300px;background:#1b1b25f2;
+        padding:12px;border-radius:8px;
+        font:13px/1.4 sans-serif;color:#cee;
+      }
+      .gu-panel hr { border-color:#444; margin:8px 0; }
+      .gu-panel .row {
+        display:flex;align-items:center;
+        justify-content:space-between;
+        margin:4px 0;
+      }
+      .gu-panel .row label { flex:1; margin-right:8px; }
+      .gu-panel input[type=number] {
+        width:60px;padding:2px 4px;
+        background:#111;color:#fee;
+        border:1px solid #555;border-radius:4px;
+        -moz-appearance:textfield;appearance:none;
+      }
+      .gu-panel input[type=number]::-webkit-inner-spin-button,
+      .gu-panel input[type=number]::-webkit-outer-spin-button {
+        -webkit-appearance:none;margin:0;
+      }
+      .gu-panel button {
+        width:100%;margin-top:8px;
+        padding:6px 0;
+        background:#444;border:none;border-radius:4px;
+        color:#eee;cursor:pointer;
+      }
+    `;
+
+    // HTML
+    const html=`
+      <div class="gu-gear">⚙️</div>
       <div class="gu-panel" style="display:none">
-        <label><input type="checkbox" id="gu-enabled"> script enabled</label><hr>
-        <label><input type="checkbox" id="gu-ac"> Auto Collector</label>
-        <label><input type="checkbox" id="gu-sm"> Shard Multiplier</label>
-        <label><input type="checkbox" id="gu-cb"> Conveyor Booster</label><hr>
-        <label><input type="checkbox" id="gu-ka"> keep-alive</label>
-        <label><input type="checkbox" id="gu-reload"> auto-reload ≈50 min</label><hr>
-        log each <input type="number" id="gu-log" min="0" step="1"> s
-        <button id="gu-reset">reset</button>
-      </div>`;
+        <div class="row"><label><input id="gu-enabled" type="checkbox"> Enable All</label></div><hr/>
+        <div class="row"><label><input id="gu-ac" type="checkbox"> Auto Collector</label></div>
+        <div class="row"><label><input id="gu-sm" type="checkbox"> Shard Multiplier</label></div>
+        <div class="row"><label><input id="gu-cb" type="checkbox"> Conveyor Booster</label></div><hr/>
+        <div class="row"><label><input id="gu-ka" type="checkbox"> keepAlive</label></div>
+        <div class="row"><label><input id="gu-reload" type="checkbox"> autoReload</label></div>
+        <div class="row">
+          <label for="gu-reload-min">Reload Interval</label>
+          <input id="gu-reload-min" type="number" min="1"/> <span>min</span>
+        </div><hr/>
+        <div class="row">
+          <label for="gu-log">Log Every</label>
+          <input id="gu-log" type="number" min="0"/> <span>s</span>
+        </div>
+        <button id="gu-reset">Reset to Defaults</button>
+      </div>
+    `;
+    document.head.insertAdjacentHTML('beforeend',`<style>${css}</style>`);
+    document.body.insertAdjacentHTML('beforeend',html);
 
-    document.head.insertAdjacentHTML('beforeend', `<style>${css}</style>`);
-    document.body.insertAdjacentHTML('beforeend', html);
+    const $=s=>document.querySelector(s),
+          gear=$('.gu-gear'),
+          panel=$('.gu-panel');
 
-    const $    = sel => document.querySelector(sel);
-    const gear = $('.gu-gear');
-    const pnl  = $('.gu-panel');
-
-    function syncUI() {
-      $('#gu-enabled').checked  = cfg.enabled;
-      $('#gu-ac').checked       = cfg.autoAC;
-      $('#gu-sm').checked       = cfg.autoSM;
-      $('#gu-cb').checked       = cfg.autoCB;
-      $('#gu-ka').checked       = cfg.keepAlive;
-      $('#gu-reload').checked   = cfg.autoReload;
-      $('#gu-log').value        = cfg.logEach;
+    function syncUI(){
+      $('#gu-enabled').checked    =cfg.enabled;
+      $('#gu-ac').checked         =cfg.autoAC;
+      $('#gu-sm').checked         =cfg.autoSM;
+      $('#gu-cb').checked         =cfg.autoCB;
+      $('#gu-ka').checked         =cfg.keepAlive;
+      $('#gu-reload').checked     =cfg.autoReload;
+      $('#gu-reload-min').value   =cfg.reloadMinutes;
+      $('#gu-log').value          =cfg.logEach;
     }
     syncUI();
 
-    $('#gu-enabled').onchange = e => { cfg.enabled   = e.target.checked; save(); startAll(); };
-    $('#gu-ac').onchange      = e => { cfg.autoAC    = e.target.checked; save(); };
-    $('#gu-sm').onchange      = e => { cfg.autoSM    = e.target.checked; save(); };
-    $('#gu-cb').onchange      = e => { cfg.autoCB    = e.target.checked; save(); };
-    $('#gu-ka').onchange      = e => { cfg.keepAlive = e.target.checked; save(); };
-    $('#gu-reload').onchange  = e => { cfg.autoReload= e.target.checked; save(); };
-    $('#gu-log').onchange     = e => { cfg.logEach   = Math.max(0,~~e.target.value); save(); };
-    $('#gu-reset').onclick    = () => { Object.assign(cfg, DEF); save(); syncUI(); startAll(); console.clear(); };
+    $('#gu-enabled').onchange    =e=>{cfg.enabled     =e.target.checked; save(); startAll();};
+    $('#gu-ac').onchange         =e=>{cfg.autoAC      =e.target.checked; save();};
+    $('#gu-sm').onchange         =e=>{cfg.autoSM      =e.target.checked; save();};
+    $('#gu-cb').onchange         =e=>{cfg.autoCB      =e.target.checked; save();};
+    $('#gu-ka').onchange         =e=>{cfg.keepAlive   =e.target.checked; save();};
+    $('#gu-reload').onchange     =e=>{cfg.autoReload  =e.target.checked; save();};
+    $('#gu-reload-min').onchange =e=>{cfg.reloadMinutes=Math.max(1,~~e.target.value); save();};
+    $('#gu-log').onchange        =e=>{cfg.logEach     =Math.max(0,~~e.target.value); save();};
+    $('#gu-reset').onclick       =()=>{Object.assign(cfg,DEF); save(); syncUI(); startAll(); console.clear();};
 
-    const togglePanel = () => pnl.style.display = pnl.style.display === 'none' ? 'block' : 'none';
-    gear.onclick = togglePanel;
-    window.addEventListener('keydown', e => {
-      if (e.altKey && e.key.toLowerCase() === 'g') { e.preventDefault(); togglePanel(); }
-    });
-
-    // следим, чтобы React не удалил нашу панель
-    new MutationObserver(() => setTimeout(ensureUI, 0))
-      .observe(document.body, { childList: true });
+    gear.onclick =()=> panel.style.display = panel.style.display==='none' ? 'block' : 'none';
   }
 })();
