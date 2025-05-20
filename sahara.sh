@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_NAME="sahara"
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.1.0"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/Sahara.sh"
 REPO_URL="https://github.com/SaharaLabsAI/setup-testnet-node.git"
@@ -89,13 +89,49 @@ config_state_sync() {
     log "=== Настройка State Sync ==="
     cd "$CONFIG_DIR" || { error "Не удалось найти config директорию!"; return 1; }
 
-    read -p "Введите trust_height (например, 100000): " trust_height
-    read -p "Введите trust_hash (hash блока на trust_height): " trust_hash
+    echo -e "\e[33m1) Автоматически подобрать блок (рекомендуется)"
+    echo "2) Ввести trust_height и trust_hash вручную"
+    read -p "Выберите вариант [1/2]: " mode
 
-    sed -i "s/^trust_height = .*/trust_height = $trust_height/" config.toml
-    sed -i "s/^trust_hash = .*/trust_hash = \"$trust_hash\"/" config.toml
+    if [[ "$mode" == "1" ]]; then
+        # Проверка наличия jq
+        if ! command -v jq &>/dev/null; then
+            log "Устанавливаю jq для обработки JSON..."
+            sudo apt-get update && sudo apt-get install -y jq
+        fi
 
-    log "State Sync успешно настроен!"
+        RPC_URL="https://testnet-cos-rpc1.saharalabs.ai"
+
+        log "Получаю последний блок с RPC..."
+        latest_height=$(curl -s "$RPC_URL/status" | jq -r '.result.sync_info.latest_block_height')
+        if [[ -z "$latest_height" || "$latest_height" == "null" ]]; then
+            error "Не удалось получить высоту блока. Проверьте подключение к RPC!"
+            cd ../../..
+            return 1
+        fi
+
+        trust_height=$((latest_height - 500))
+
+        log "Получаю hash блока на высоте $trust_height..."
+        trust_hash=$(curl -s "$RPC_URL/commit?height=$trust_height" | jq -r '.result.signed_header.commit.block_id.hash')
+        if [[ -z "$trust_hash" || "$trust_hash" == "null" ]]; then
+            error "Не удалось получить hash блока. Проверьте подключение к RPC!"
+            cd ../../..
+            return 1
+        fi
+
+        sed -i "s/^trust_height = .*/trust_height = $trust_height/" config.toml
+        sed -i "s/^trust_hash = .*/trust_hash = \"$trust_hash\"/" config.toml
+
+        log "State Sync авто-настроен: trust_height = $trust_height, trust_hash = $trust_hash"
+    else
+        read -p "Введите trust_height (например, 100000): " trust_height
+        read -p "Введите trust_hash (hash блока на trust_height): " trust_hash
+        sed -i "s/^trust_height = .*/trust_height = $trust_height/" config.toml
+        sed -i "s/^trust_hash = .*/trust_hash = \"$trust_hash\"/" config.toml
+        log "State Sync настроен вручную!"
+    fi
+
     cd ../../..
 }
 
