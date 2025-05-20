@@ -148,6 +148,7 @@ config_batch_limit() {
 }
 
 ensure_minimum_gas_prices() {
+    fix_toml_file "$APP_TOML"
     if grep -q "^minimum-gas-prices" "$APP_TOML"; then
         log "minimum-gas-prices уже указан в app.toml"
         return
@@ -158,7 +159,8 @@ ensure_minimum_gas_prices() {
         [ -z "$denom" ] && denom=$(jq -r '.app_state.bank.denom_metadata[0].base // empty' "$GENESIS_JSON")
     fi
     [ -z "$denom" ] && denom="photino"
-    sed -i "1iminimum-gas-prices = \"0.01${denom}\"" "$APP_TOML"
+    echo -e "\nminimum-gas-prices = \"0.01${denom}\"" >> "$APP_TOML"
+    fix_toml_file "$APP_TOML"
     log "minimum-gas-prices = \"0.01${denom}\" успешно добавлен в app.toml"
 }
 
