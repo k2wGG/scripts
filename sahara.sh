@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_NAME="sahara"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.1.1"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/Sahara.sh"
 REPO_URL="https://github.com/SaharaLabsAI/setup-testnet-node.git"
@@ -85,53 +85,45 @@ clone_repo() {
     fi
 }
 
+get_latest_state_sync() {
+    local RPC_URL="https://testnet-cos-rpc1.saharalabs.ai"
+    # Получить последний снэпшот (каждые 1000 блоков)
+    local latest_height=$(curl -s "$RPC_URL/status" | jq -r .result.sync_info.latest_block_height)
+    if [[ -z "$latest_height" || "$latest_height" == "null" ]]; then
+        error "Не удалось получить последний блок с RPC."
+        return 1
+    fi
+    # Округлить вниз до ближайшей 1000
+    local trust_height=$(( (latest_height / 1000) * 1000 ))
+    # Получить hash
+    local trust_hash=$(curl -s "$RPC_URL/commit?height=$trust_height" | jq -r .result.signed_header.commit.block_id.hash)
+    if [[ -z "$trust_hash" || "$trust_hash" == "null" ]]; then
+        error "Не удалось получить hash блока на высоте $trust_height."
+        return 1
+    fi
+    echo "$trust_height" "$trust_hash"
+}
+
 config_state_sync() {
     log "=== Настройка State Sync ==="
     cd "$CONFIG_DIR" || { error "Не удалось найти config директорию!"; return 1; }
-
-    echo -e "\e[33m1) Автоматически подобрать блок (рекомендуется)"
-    echo "2) Ввести trust_height и trust_hash вручную"
-    read -p "Выберите вариант [1/2]: " mode
-
-    if [[ "$mode" == "1" ]]; then
-        # Проверка наличия jq
-        if ! command -v jq &>/dev/null; then
-            log "Устанавливаю jq для обработки JSON..."
-            sudo apt-get update && sudo apt-get install -y jq
-        fi
-
-        RPC_URL="https://testnet-cos-rpc1.saharalabs.ai"
-
-        log "Получаю последний блок с RPC..."
-        latest_height=$(curl -s "$RPC_URL/status" | jq -r '.result.sync_info.latest_block_height')
-        if [[ -z "$latest_height" || "$latest_height" == "null" ]]; then
-            error "Не удалось получить высоту блока. Проверьте подключение к RPC!"
-            cd ../../..
-            return 1
-        fi
-
-        trust_height=$((latest_height - 500))
-
-        log "Получаю hash блока на высоте $trust_height..."
-        trust_hash=$(curl -s "$RPC_URL/commit?height=$trust_height" | jq -r '.result.signed_header.commit.block_id.hash')
-        if [[ -z "$trust_hash" || "$trust_hash" == "null" ]]; then
-            error "Не удалось получить hash блока. Проверьте подключение к RPC!"
-            cd ../../..
-            return 1
-        fi
-
-        sed -i "s/^trust_height = .*/trust_height = $trust_height/" config.toml
-        sed -i "s/^trust_hash = .*/trust_hash = \"$trust_hash\"/" config.toml
-
-        log "State Sync авто-настроен: trust_height = $trust_height, trust_hash = $trust_hash"
-    else
+    # Получить trust_height и trust_hash автоматически
+    read -p "Автоматически получить актуальные trust_height/trust_hash? [Y/n]: " auto
+    if [[ "$auto" =~ ^[Nn]$ ]]; then
         read -p "Введите trust_height (например, 100000): " trust_height
         read -p "Введите trust_hash (hash блока на trust_height): " trust_hash
-        sed -i "s/^trust_height = .*/trust_height = $trust_height/" config.toml
-        sed -i "s/^trust_hash = .*/trust_hash = \"$trust_hash\"/" config.toml
-        log "State Sync настроен вручную!"
+    else
+        read -p "RPC endpoint (enter для дефолта): " rpc_custom
+        local rpc_url=${rpc_custom:-"https://testnet-cos-rpc1.saharalabs.ai"}
+        result=($(get_latest_state_sync "$rpc_url"))
+        trust_height="${result[0]}"
+        trust_hash="${result[1]}"
+        log "Автоматически выбран trust_height: $trust_height"
+        log "Автоматически выбран trust_hash: $trust_hash"
     fi
-
+    sed -i "s/^trust_height *=.*/trust_height = $trust_height/" config.toml
+    sed -i "s/^trust_hash *=.*/trust_hash = \"$trust_hash\"/" config.toml
+    log "State Sync успешно настроен!"
     cd ../../..
 }
 
@@ -139,7 +131,7 @@ config_moniker() {
     log "=== Настройка имени ноды ==="
     cd "$CONFIG_DIR" || { error "Не удалось найти config директорию!"; return 1; }
     read -p "Введите moniker (имя вашей ноды): " moniker
-    sed -i "s/^moniker = .*/moniker = \"$moniker\"/" config.toml
+    sed -i "s/^moniker *=.*/moniker = \"$moniker\"/" config.toml
     log "Moniker установлен!"
     cd ../../..
 }
@@ -148,7 +140,7 @@ config_external_address() {
     log "=== Настройка внешнего адреса ==="
     cd "$CONFIG_DIR" || { error "Не удалось найти config директорию!"; return 1; }
     read -p "Введите внешний адрес (IP:26656): " external_address
-    sed -i "s|^external_address = .*|external_address = \"$external_address\"|" config.toml
+    sed -i "s|^external_address *=.*|external_address = \"$external_address\"|" config.toml
     log "Внешний адрес установлен!"
     cd ../../..
 }
@@ -156,7 +148,8 @@ config_external_address() {
 config_batch_limit() {
     log "=== Настройка batch-request-limit ==="
     cd "$CONFIG_DIR" || { error "Не удалось найти config директорию!"; return 1; }
-    if ! grep -q "batch-request-limit" app.toml; then
+    # Только если параметра нет, добавить его в app.toml (по инструкции из репо)
+    if ! grep -q "^batch-request-limit" app.toml; then
         echo 'batch-request-limit = "500"' >> app.toml
         log "Параметр batch-request-limit добавлен!"
     else
