@@ -8,4 +8,4 @@ Gensyn=1.0.0
 abstract=1.0.0
 BITZ-CLI=1.1.0
 drosera=1.0.0
-sahara=1.0.0
+sahara=1.1.0
