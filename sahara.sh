@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_NAME="sahara"
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.2.1"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/Sahara.sh"
 REPO_URL="https://github.com/SaharaLabsAI/setup-testnet-node.git"
@@ -9,6 +9,16 @@ NODE_DIR="sahara-testnet-node"
 CONFIG_DIR="$NODE_DIR/chain-data/config"
 APP_TOML="$CONFIG_DIR/app.toml"
 GENESIS_JSON="$CONFIG_DIR/genesis.json"
+
+fix_toml_file() {
+    local file="$1"
+    if [ ! -f "$file" ]; then
+        return
+    fi
+    sed -i 's/\r$//' "$file"         # Remove \r
+    sed -i '$a\' "$file"             # Ensure newline at end
+    LC_ALL=C sed -i 's/[^ -~\n]//g' "$file" # Remove non-ASCII (опасные байты)
+}
 
 show_logo() {
 cat <<'EOF'
@@ -146,6 +156,8 @@ config_batch_limit() {
     fi
     cd ../../..
 }
+
+
 
 ensure_minimum_gas_prices() {
     fix_toml_file "$APP_TOML"
