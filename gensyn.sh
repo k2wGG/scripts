@@ -120,7 +120,7 @@ services:
       - OTEL_LOG_LEVEL=DEBUG
 
   node:
-    image: europe-docker.pkg.dev/gensyn-public-b7d9/public/rl-swarm:v0.0.2
+    image: europe-docker.pkg.dev/gensyn-public-b7d9/public/rl-swarm:v0.4.2
     command: ./run_hivemind_docker.sh
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
@@ -176,7 +176,7 @@ update_node() {
     fi
     cd "$HOME/rl-swarm" || return
     set_dc_command
-    new_image="rl-swarm:v0.0.2"
+    new_image="rl-swarm:v0.4.2"
     sed -i "s#\(image: europe-docker.pkg.dev/gensyn-public-b7d9/public/\).*#\1${new_image}#g" docker-compose.yml
     $DC pull
     $DC up -d --force-recreate
