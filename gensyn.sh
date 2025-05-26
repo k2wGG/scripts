@@ -6,7 +6,7 @@
 
 # Переменные для проверки версии
 SCRIPT_NAME="Gensyn"               # Ключ для поиска в versions.txt
-SCRIPT_VERSION="1.0.0"             # Текущая локальная версия скрипта
+SCRIPT_VERSION="1.1.0"             # Текущая локальная версия скрипта
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/Gensyn.sh"
 
