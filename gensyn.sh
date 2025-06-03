@@ -2,7 +2,7 @@
 
 # Переменные для проверки версии
 SCRIPT_NAME="Gensyn"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/Gensyn.sh"
 
@@ -116,6 +116,7 @@ start_gensyn_screen() {
         rm -rf node_modules yarn.lock package-lock.json
         yarn install
         yarn upgrade && yarn add next@latest && yarn add viem@latest
+        yarn add encoding pino-pretty
         cd ..
         ./run_rl_swarm.sh
     '
