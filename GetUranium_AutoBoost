@@ -3,12 +3,12 @@
 // @namespace     https://github.com/k2wGG
 // @version       2.9.1
 // @description   Автоматизация бустеров, сбор фермы, продвинутый keep-alive и авто-перезагрузка для GetUranium.io.
-// @author        k2wGG (модифицировано ИИ-специалистом высшего уровня)
+// @author        k2wGG
 // @match         https://geturanium.io/*
 // @match         https://www.geturanium.io/*
 // @run-at        document-start
 // @grant         none
-// @inject-into   page // КРИТИЧЕСКИ ВАЖНО: Позволяет скрипту работать в контексте страницы
+// @inject-into   page //Позволяет скрипту работать в контексте страницы
 // ==/UserScript==
 
 ;(function(){
