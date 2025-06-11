@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         GetUranium AutoBoost v2
 // @namespace    https://github.com/k2wGG
-// @version      2.7
-// @description  Автозапуск бустеров
+// @version      2.8
+// @description  Автозапуск бустеров и сбора наград
 // @match        https://www.geturanium.io/*
 // @run-at       document-idle
 // @inject-into  page
@@ -11,9 +11,10 @@
 
 ;(function(){
   'use strict';
-  console.info('🚀 AutoBoost v2.7 loaded');
+  console.info('🚀 AutoBoost v2.8 loaded');
 
-  // 0) React isTrusted patch
+  // 0) React isTrusted patch - Применяется перед загрузкой страницы для имитации доверенных событий
+  // Puppeteer уже делает это через page.evaluateOnNewDocument, здесь для Tampermonkey.
   if(!Event.prototype.__ab_trusted){
     [Event, MouseEvent].forEach(C=>{
       Object.defineProperty(C.prototype,'isTrusted',{
@@ -26,15 +27,15 @@
 
   // 1) Config + storage
   const DEF = {
-    enabled:       true,
-    autoAC:        true,
-    autoSM:        true,
-    autoCB:        true,
-    autoFarm:      true,        // ← новый флаг
-    keepAlive:     true,
-    autoReload:    true,
-    reloadMinutes: 50,
-    logEach:       10
+    enabled:         true,
+    autoAC:          true,
+    autoSM:          true,
+    autoCB:          true,
+    autoFarm:        true,
+    keepAlive:       true,
+    autoReload:      true,
+    reloadMinutes:   50,
+    logEach:         10
   };
   const LS_CFG   = 'gu-autoboost-config';
   const LS_STATS = 'gu-autoboost-stats';
@@ -43,7 +44,10 @@
 
   function loadConfig(){
     try{ return {...DEF, ...JSON.parse(localStorage.getItem(LS_CFG)||'{}')}; }
-    catch{ return {...DEF}; }
+    catch(e){
+      console.error('[AutoBoost] Failed to load config, using defaults:', e);
+      return {...DEF};
+    }
   }
   function saveConfig(){
     localStorage.setItem(LS_CFG, JSON.stringify(cfg));
@@ -52,10 +56,11 @@
     try{
       return JSON.parse(sessionStorage.getItem(LS_STATS)) || {
         reloadCount: 0,
-        clickCount: { autoAC:0, autoSM:0, autoCB:0 }
+        clickCount: { autoAC:0, autoSM:0, autoCB:0, autoFarm:0 } // Добавлен счетчик для фарма
       };
-    }catch{
-      return { reloadCount: 0, clickCount: { autoAC:0, autoSM:0, autoCB:0 } };
+    }catch(e){
+      console.error('[AutoBoost] Failed to load stats, using defaults:', e);
+      return { reloadCount: 0, clickCount: { autoAC:0, autoSM:0, autoCB:0, autoFarm:0 } };
     }
   }
   function saveStats(){
@@ -69,48 +74,93 @@
   setInterval(()=>{
     if(!cfg.keepAlive) return;
     fetch('/favicon.ico',{cache:'no-store',mode:'no-cors'}).catch(()=>{});
+    
+    // Имитация активности мыши и клавиатуры
     document.dispatchEvent(new MouseEvent('mousemove',{bubbles:true}));
     document.dispatchEvent(new Event('visibilitychange'));
-  }, rnd(90,120)*1000);
+    
+    // Дополнительная имитация активности:
+    // Прокрутка страницы (случайная небольшая прокрутка)
+    window.scrollBy(0, rnd(-1, 1)); // Случайная прокрутка на +/- 1 пиксель
+    
+    // Имитация нажатия клавиши (без реального ввода текста)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+    document.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true }));
+
+  }, rnd(90,120)*1000); // Интервал может быть уменьшен, если нужно более частое "пробуждение"
 
   // 3) Proxy fetch for 429 & 403
   let backoffUntil = 0;
   const _fetch = window.fetch.bind(window);
-  window.fetch = (...args) => _fetch(...args).then(res=>{
+  window.fetch = async (...args) => { // Сделаем fetch прокси асинхронным
+    const res = await _fetch(...args);
     if(res.status===429){
       backoffUntil = Date.now() + 5*60*1000;
-      console.warn('[AutoBoost] 429 → pause clicks 5m');
+      console.warn('[AutoBoost] 429 Too Many Requests → pause clicks 5m');
     }
     if(res.status===403){
-      console.warn('[AutoBoost] 403 → hard reload');
+      console.warn('[AutoBoost] 403 Forbidden → hard reload');
       hardReload();
     }
     return res;
-  });
+  };
 
   // 4) Auto-click boosters
   const LABELS = {
     autoAC: 'auto collector',
     autoSM: 'shard multiplier',
-    autoCB: 'conveyor booster'
+    autoCB: 'conveyor booster',
+    autoFarm: 'farm reward' // Добавлена метка для кнопки фермы
   };
   const timers = {}, lastClick = {}, nextLog = { value: Date.now() };
 
-  function findBtn(key){
+  function findBtn(text){
+    // Ищем кнопку по тексту, который начинается с заданного (без учета регистра)
     return Array.from(document.querySelectorAll('button'))
-      .find(b => b.innerText.toLowerCase().startsWith(LABELS[key]));
+      .find(b => b.innerText.toLowerCase().startsWith(text.toLowerCase()));
   }
   function getCooldown(btn){
-    if(!btn||!btn.disabled) return 0;
-    if(/activating/i.test(btn.innerText)) return 3000;
+    if(!btn||btn.disabled === false) return 0; // Кнопка не существует или не заблокирована
+    if(/activating/i.test(btn.innerText)) return 3000; // Состояние "activating"
     const m = /(\d+)\s*m.*?(\d+)\s*s/i.exec(btn.innerText);
-    return m? (60*+m[1] + +m[2])*1000 : 600000;
+    if(m) return (60*+m[1] + +m[2]) * 1000;
+    const s = /(\d+)\s*s/i.exec(btn.innerText); // Проверка только на секунды
+    if(s) return (+s[1]) * 1000;
+    return 600000; // Значение по умолчанию, если не удалось распарсить (например, 10 минут)
   }
+
+  // Улучшенная функция doClick с более реалистичной симуляцией координат
   function doClick(el){
-    ['mousedown','mouseup','click'].forEach(t=>
-      el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}))
+    if (!el) {
+      console.warn('[AutoBoost] doClick: Element is null or undefined. Skipping click.');
+      return;
+    }
+
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+      console.warn('[AutoBoost] doClick: Element has no visible area or is detached. Skipping click.');
+      return;
+    }
+
+    // Генерируем случайные координаты внутри элемента для более естественного клика
+    const clientX = rect.left + Math.random() * rect.width;
+    const clientY = rect.top + Math.random() * rect.height;
+
+    // Последовательно диспатчим события мыши
+    ['mousedown','mouseup','click'].forEach(type =>
+      el.dispatchEvent(new MouseEvent(type,{
+        bubbles: true,
+        cancelable: true,
+        view: window,
+        button: 0, // Левая кнопка мыши
+        buttons: type === 'mousedown' ? 1 : 0, // Устанавливаем кнопку для mousedown
+        clientX: clientX,
+        clientY: clientY,
+        isTrusted: true // Ваш глобальный патч уже обрабатывает это
+      }))
     );
   }
+
   function schedule(key){
     clearTimeout(timers[key]);
     if(Date.now()<backoffUntil){
@@ -121,24 +171,32 @@
       timers[key] = setTimeout(()=>schedule(key), 3000);
       return;
     }
-    const btn = findBtn(key), cd = getCooldown(btn);
+    const btn = findBtn(LABELS[key]), cd = getCooldown(btn); // Использование LABELS[key]
+
     if(cd===0){
       const since = Date.now() - (lastClick[key]||0),
-            gap   = 8000 + rnd(0,2000);
+            gap   = 8000 + rnd(0,2000); // Случайная задержка между кликами
       if(cfg[key] && btn && !btn.disabled && since>gap){
         doClick(btn);
         lastClick[key] = Date.now();
         stats.clickCount[key]++; saveStats(); updateStatsUI();
         log(`⚡ ${key}`);
       }
-      timers[key] = setTimeout(()=>schedule(key),1000);
+      timers[key] = setTimeout(()=>schedule(key),1000); // Проверяем каждую секунду, если нет кулдауна
     } else {
-      const delay = cd + 1000 + rnd(0,1500);
+      const delay = cd + 1000 + rnd(0,1500); // Задержка + небольшой рандом
       log(`⏳ ${key}: ${Math.round(cd/1000)}s`);
       timers[key] = setTimeout(()=>schedule(key), delay);
     }
   }
-  function startAll(){ Object.keys(LABELS).forEach(schedule); }
+  function startAll(){
+    Object.keys(LABELS).forEach(key => {
+      // Игнорируем 'autoFarm' в этой функции, т.к. она обрабатывается отдельно
+      if (key !== 'autoFarm') {
+        schedule(key);
+      }
+    });
+  }
 
   // 5) Auto-reload
   let reloadTimer = null;
@@ -146,69 +204,77 @@
     if(reloadTimer) clearTimeout(reloadTimer);
     if(!cfg.autoReload) return;
     const ms = cfg.reloadMinutes * 60 * 1000;
-    console.info(`[AutoBoost] reload in ${cfg.reloadMinutes}m`);
+    console.info(`[AutoBoost] Next reload in ${cfg.reloadMinutes}m`);
     reloadTimer = setTimeout(()=>{
       stats.reloadCount++; saveStats(); updateStatsUI();
       hardReload();
     }, ms);
   }
   function hardReload(){
-    const url = location.pathname + '?_=' + Date.now();
-    location.replace(url);
+    const url = location.pathname + '?_=' + Date.now(); // Добавляем рандомный параметр для обхода кеша
+    location.replace(url); // Использование replace для предотвращения добавления в историю браузера
   }
 
-  // 6) Vercel keep-alive
+  // 6) Vercel keep-alive (если сайт размещен на Vercel и требует частых запросов)
   function scheduleVercel(){
     if(!cfg.keepAlive) return;
     const ms = rnd(50,55)*60*1000;
     console.info(`[AutoBoost] Vercel keepalive in ≈${Math.round(ms/60000)}m`);
     setTimeout(()=>{
       const f = document.createElement('iframe');
-      f.style.display='none'; f.src='/';
+      f.style.display='none'; f.src='/'; // Загружаем главную страницу в скрытом iframe
       document.body.append(f);
-      setTimeout(()=>f.remove(),15000);
-      scheduleVercel();
+      setTimeout(()=>f.remove(),15000); // Удаляем iframe через 15 секунд
+      scheduleVercel(); // Планируем следующий запрос
     }, ms);
   }
 
   // 7) Farm reward every 8 hours (toggleable)
-  let farmTimer = null;
+  let farmIntervalId = null; // Изменяем название, чтобы избежать путаницы с farmTimer
   function doFarm(){
-    const farmBtn = document.querySelector('button.farm-reward');
+    if (!cfg.autoFarm) return; // Проверка на включение флага
+    const farmBtn = findBtn(LABELS.autoFarm); // Используем findBtn для поиска кнопки фермы
     if(farmBtn && !farmBtn.disabled){
-      console.info('🌾 Farm reward');
+      console.info('🌾 Farm reward button found and enabled. Clicking...');
       doClick(farmBtn);
+      stats.clickCount.autoFarm++; saveStats(); updateStatsUI(); // Обновляем статистику фарма
+    } else if (farmBtn && farmBtn.disabled) {
+      console.info('🌾 Farm reward button found but disabled (on cooldown).');
+    } else {
+      console.warn('🌾 Farm reward button not found.');
     }
   }
   function scheduleFarm(){
-    if(farmTimer) clearInterval(farmTimer);
+    if(farmIntervalId) clearInterval(farmIntervalId); // Очищаем предыдущий интервал, если он был
     if(!cfg.autoFarm) return;
-    farmTimer = setInterval(doFarm, 8*60*60*1000);
-    // можно сразу запустить раз при инициализации:
+    // Запускаем сразу, если кнопка доступна, затем по расписанию
     doFarm();
+    farmIntervalId = setInterval(doFarm, 8*60*60*1000 + rnd(0, 5*60*1000)); // 8 часов + до 5 минут рандома
   }
 
   // 8) Init
   function init(){
-    if(!findBtn('autoAC')){
+    // Ждем появления хотя бы одной из кнопок бустов для инициализации
+    if(!findBtn(LABELS.autoAC) && !findBtn(LABELS.autoSM) && !findBtn(LABELS.autoCB)){
       requestAnimationFrame(init);
       return;
     }
-    console.info('✅ AutoBoost init');
+    console.info('✅ AutoBoost initialized');
     startAll();
     renderUI();
     scheduleReload();
     scheduleVercel();
-    scheduleFarm();            // запускаем планировщик фарма
+    scheduleFarm(); // Запускаем планировщик фарма
   }
   if(document.readyState==='complete') init();
   else window.addEventListener('load', init, { once:true });
+  // MutationObserver для динамически загружаемых элементов
   new MutationObserver(m=> m.some(x=>x.type==='childList') && startAll())
     .observe(document.documentElement,{childList:true,subtree:true});
 
   // 9) Logging
   function log(msg){
-    if(!cfg.logEach) return;
+    if(!cfg.logEach) return; // Если 0, логирование выключено
     const now = Date.now();
     if(now >= nextLog.value){
       console.log(`[AutoBoost] ${msg}`);
@@ -216,10 +282,11 @@
     }
   }
 
-  // 10) UI + stats (добавлен чекбокс для autoFarm)
-  let updateStatsUI = ()=>{};
+  // 10) UI + stats (добавлен чекбокс и статистика для autoFarm)
+  let updateStatsUI = ()=>{}; // Заглушка, будет переопределена
   function renderUI(){
-    if(document.querySelector('.gu-gear')) return;
+    if(document.querySelector('.gu-gear')) return; // Предотвращаем дублирование UI
+
     const css = `
       .gu-gear{position:fixed;top:12px;right:12px;width:36px;height:36px;
         background:#1b1b25dd;border-radius:50%;display:flex;align-items:center;
@@ -227,11 +294,11 @@
       .gu-gear:hover{transform:rotate(45deg);}
       .gu-panel{position:fixed;top:56px;right:12px;width:340px;
         background:#1b1b25f2;padding:12px;border-radius:8px;
-        font:13px/1.4 sans-serif;color:#cee;}
+        font:13px/1.4 sans-serif;color:#cee;box-shadow: 0 4px 8px rgba(0,0,0,0.3);}
       .gu-panel hr{border-color:#444;margin:8px 0;}
       .gu-panel .row{display:flex;align-items:center;
         justify-content:space-between;margin:4px 0;}
-      .gu-panel .row label{flex:1;margin-right:8px;}
+      .gu-panel .row label{flex:1;margin-right:8px;cursor:pointer;}
       .gu-panel input[type=number]{
         width:60px;padding:2px 4px;background:#111;color:#fee;
         border:1px solid #555;border-radius:4px;
@@ -240,8 +307,10 @@
       .gu-panel input::-webkit-outer-spin-button{
         -webkit-appearance:none;margin:0;}
       .gu-panel button{width:100%;margin-top:8px;padding:6px 0;
-        background:#444;border:none;border-radius:4px;color:#eee;cursor:pointer;}
-      .stat-value{font-weight:bold;}
+        background:#444;border:none;border-radius:4px;color:#eee;cursor:pointer;
+        transition: background-color 0.2s;}
+      .gu-panel button:hover{background:#555;}
+      .stat-value{font-weight:bold;color:#4CAF50;}
     `;
     const html = `
       <div class="gu-gear">⚙️</div>
@@ -251,8 +320,8 @@
         <div class="row"><label><input id="gu-sm" type="checkbox"> Shard Multiplier</label></div>
         <div class="row"><label><input id="gu-cb" type="checkbox"> Conveyor Booster</label></div><hr/>
         <div class="row"><label><input id="gu-farm" type="checkbox"> Auto Farm (8h)</label></div><hr/>
-        <div class="row"><label><input id="gu-ka" type="checkbox"> keepAlive</label></div>
-        <div class="row"><label><input id="gu-reload" type="checkbox"> autoReload</label></div>
+        <div class="row"><label><input id="gu-ka" type="checkbox"> Keep Alive</label></div>
+        <div class="row"><label><input id="gu-reload" type="checkbox"> Auto Reload</label></div>
         <div class="row">
           <label for="gu-reload-min">Reload Interval (min)</label>
           <input id="gu-reload-min" type="number" min="1"/>
@@ -264,14 +333,15 @@
         <div class="row"><label>Reload Count</label><div id="stat-reloads" class="stat-value">0</div></div>
         <div class="row"><label>Collector Clicks</label><div id="stat-autoAC"  class="stat-value">0</div></div>
         <div class="row"><label>Shard Clicks</label><div id="stat-autoSM" class="stat-value">0</div></div>
-        <div class="row"><label>Booster Clicks</label><div id="stat-autoCB" class="stat-value">0</div></div><hr/>
+        <div class="row"><label>Booster Clicks</label><div id="stat-autoCB" class="stat-value">0</div></div>
+        <div class="row"><label>Farm Clicks</label><div id="stat-autoFarm" class="stat-value">0</div></div><hr/>
         <button id="gu-reset">Reset to Defaults</button>
       </div>
     `;
     document.head.insertAdjacentHTML('beforeend',`<style>${css}</style>`);
     document.body.insertAdjacentHTML('beforeend',html);
 
-    const $     = s=>document.querySelector(s),
+    const $       = s=>document.querySelector(s),
           gear  = $('.gu-gear'),
           panel = $('.gu-panel');
 
@@ -280,36 +350,37 @@
       $('#stat-autoAC').textContent   = stats.clickCount.autoAC;
       $('#stat-autoSM').textContent   = stats.clickCount.autoSM;
       $('#stat-autoCB').textContent   = stats.clickCount.autoCB;
+      $('#stat-autoFarm').textContent = stats.clickCount.autoFarm; // Обновление статистики для фарма
     };
 
     function syncUI(){
-      $('#gu-enabled').checked     = cfg.enabled;
-      $('#gu-ac').checked          = cfg.autoAC;
-      $('#gu-sm').checked          = cfg.autoSM;
-      $('#gu-cb').checked          = cfg.autoCB;
-      $('#gu-farm').checked        = cfg.autoFarm;
-      $('#gu-ka').checked          = cfg.keepAlive;
-      $('#gu-reload').checked      = cfg.autoReload;
-      $('#gu-reload-min').value    = cfg.reloadMinutes;
-      $('#gu-log').value           = cfg.logEach;
+      $('#gu-enabled').checked       = cfg.enabled;
+      $('#gu-ac').checked            = cfg.autoAC;
+      $('#gu-sm').checked            = cfg.autoSM;
+      $('#gu-cb').checked            = cfg.autoCB;
+      $('#gu-farm').checked          = cfg.autoFarm;
+      $('#gu-ka').checked            = cfg.keepAlive;
+      $('#gu-reload').checked        = cfg.autoReload;
+      $('#gu-reload-min').value      = cfg.reloadMinutes;
+      $('#gu-log').value             = cfg.logEach;
       updateStatsUI();
     }
     syncUI();
 
-    $('#gu-enabled').onchange     = e=>{ cfg.enabled      = e.target.checked; saveConfig(); startAll(); };
-    $('#gu-ac').onchange          = e=>{ cfg.autoAC       = e.target.checked; saveConfig(); };
-    $('#gu-sm').onchange          = e=>{ cfg.autoSM       = e.target.checked; saveConfig(); };
-    $('#gu-cb').onchange          = e=>{ cfg.autoCB       = e.target.checked; saveConfig(); };
-    $('#gu-farm').onchange        = e=>{ cfg.autoFarm     = e.target.checked; saveConfig(); scheduleFarm(); };
-    $('#gu-ka').onchange          = e=>{ cfg.keepAlive    = e.target.checked; saveConfig(); };
-    $('#gu-reload').onchange      = e=>{ cfg.autoReload   = e.target.checked; saveConfig(); scheduleReload(); };
+    $('#gu-enabled').onchange      = e=>{ cfg.enabled       = e.target.checked; saveConfig(); startAll(); };
+    $('#gu-ac').onchange           = e=>{ cfg.autoAC        = e.target.checked; saveConfig(); };
+    $('#gu-sm').onchange           = e=>{ cfg.autoSM        = e.target.checked; saveConfig(); };
+    $('#gu-cb').onchange           = e=>{ cfg.autoCB        = e.target.checked; saveConfig(); };
+    $('#gu-farm').onchange         = e=>{ cfg.autoFarm      = e.target.checked; saveConfig(); scheduleFarm(); };
+    $('#gu-ka').onchange           = e=>{ cfg.keepAlive     = e.target.checked; saveConfig(); };
+    $('#gu-reload').onchange       = e=>{ cfg.autoReload    = e.target.checked; saveConfig(); scheduleReload(); };
     $('#gu-reload-min').onchange  = e=>{ cfg.reloadMinutes= Math.max(1,~~e.target.value); saveConfig(); scheduleReload(); };
-    $('#gu-log').onchange         = e=>{ cfg.logEach      = Math.max(0,~~e.target.value); saveConfig(); };
-    $('#gu-reset').onclick        = ()=>{
+    $('#gu-log').onchange          = e=>{ cfg.logEach       = Math.max(0,~~e.target.value); saveConfig(); };
+    $('#gu-reset').onclick         = ()=>{
       Object.assign(cfg,DEF);
-      stats = { reloadCount:0, clickCount:{autoAC:0,autoSM:0,autoCB:0} };
+      stats = { reloadCount:0, clickCount:{autoAC:0,autoSM:0,autoCB:0,autoFarm:0} }; // Сброс статистики для фарма
       saveConfig(); saveStats();
-      syncUI(); startAll(); scheduleFarm(); console.clear();
+      syncUI(); startAll(); scheduleFarm(); console.clear(); // Перезапуск планировщика фарма
     };
 
     gear.onclick = ()=> panel.style.display = panel.style.display==='none'?'block':'none';
