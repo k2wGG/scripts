@@ -1,75 +1,64 @@
 // ==UserScript==
 // @name          GetUranium AutoBoost v2
 // @namespace     https://github.com/k2wGG
-// @version       2.9.1
-// @description   Автоматизация бустеров, сбор фермы, продвинутый keep-alive и авто-перезагрузка для GetUranium.io.
+// @version       2.9.2
+// @description   Автоматизация бустеров, сбор фермы, продвинутый keep-alive, активация Refinery и авто-перезагрузка.
 // @author        k2wGG
 // @match         https://geturanium.io/*
 // @match         https://www.geturanium.io/*
+// @match         https://geturanium.io/refinery*
+// @match         https://www.geturanium.io/refinery*
 // @run-at        document-start
 // @grant         none
-// @inject-into   page //Позволяет скрипту работать в контексте страницы
+// @inject-into   page
 // ==/UserScript==
 
 ;(function(){
   'use strict';
-  console.info('🚀 AutoBoost v2.9.1 загружен. Активированы продвинутые механизмы.');
+  console.info('🚀 AutoBoost v2.9.2 загружен. Активированы продвинутые механизмы.');
 
   /* ---------------------------------------------------------------
    * 0) ГЛУБОКИЕ ПАТЧИ ДЛЯ МАКСИМАЛЬНОЙ ИМИТАЦИИ АКТИВНОСТИ И СТАБИЛЬНОСТИ
    * ------------------------------------------------------------- */
 
-  // 0.1) Патч Event.isTrusted: Делаем все эмулируемые события "доверенными"
-  // Это критично для обхода многих анти-бот систем и корректной работы UI-фреймворков (вроде React).
   if(!Event.prototype.__ab_trusted){
     [Event, MouseEvent, KeyboardEvent, UIEvent].forEach(C=>{
       try {
         Object.defineProperty(C.prototype,'isTrusted',{
           get(){ return true; },
-          configurable:true // Важно: позволяет переопределить свойство, если оно уже существует, но не гарантирует успех.
+          configurable:true
         });
       } catch (e) {
-        console.warn(`[AutoBoost Pro] Не удалось пропатчить Event.isTrusted для ${C.name}:`, e);
+        console.warn(`[AutoBoost v2] Не удалось пропатчить Event.isTrusted для ${C.name}:`, e);
       }
     });
     Event.prototype.__ab_trusted = true;
-    console.info('[AutoBoost Pro] Event.isTrusted успешно пропатчен: всегда true.');
+    console.info('[AutoBoost v2] Event.isTrusted успешно пропатчен: всегда true.');
   }
 
-  // 0.2) Патч requestAnimationFrame (RAF) для поддержания непрерывных обновлений
-  // Цель: Обмануть логику сайта, которая может приостанавливать анимации/расчеты в скрытых вкладках.
-  // Это достигается путем форсированного вызова колбэков RAF, когда вкладка неактивна.
   if (window.requestAnimationFrame && !window.requestAnimationFrame.__ab_patched) {
     const _originalRequestAnimationFrame = window.requestAnimationFrame;
-    let lastRafTime = performance.now(); // Инициализация с текущим временем
-    const RAF_MIN_INTERVAL = 1000 / 60; // ≈ 60 кадров в секунду
+    let lastRafTime = performance.now();
+    const RAF_MIN_INTERVAL = 1000 / 60;
 
     window.requestAnimationFrame = function(callback) {
       const now = performance.now();
-      // Если вкладка скрыта И прошло достаточно времени с последнего форсированного вызова RAF,
-      // мы принудительно вызываем колбэк.
       if (document.hidden && (now - lastRafTime >= RAF_MIN_INTERVAL)) {
-          lastRafTime = now; // Обновляем время последнего форсированного вызова
+          lastRafTime = now;
           try {
-              callback(now); // Вызываем колбэк с текущим временем
+              callback(now);
           } catch (e) {
               console.error('[AutoBoost v2] Ошибка принудительного RAF колбэка:', e);
           }
       }
-      // Всегда вызываем оригинальный requestAnimationFrame.
-      // Это позволяет браузеру управлять циклом RAF, когда вкладка активна,
-      // и позволяет сайту корректно регистрировать свои колбэки.
       return _originalRequestAnimationFrame.call(window, callback);
     };
     window.requestAnimationFrame.__ab_patched = true;
     console.info('[AutoBoost v2] requestAnimationFrame пропатчен для непрерывной активности.');
   }
 
-  // 0.3) Патч setTimeout/setInterval для точного тайминга в любых состояниях вкладки
-  // Цель: Предотвратить "дросселирование" (замедление) таймеров браузером до 1 секунды
-  // для скрытых или неактивных вкладок.
   if (!window.__ab_timers_patched) {
-    const MIN_INTERVAL_MS = 4; // Стандартное минимальное значение для таймеров в браузерах
+    const MIN_INTERVAL_MS = 4;
 
     const _originalSetTimeout = window.setTimeout;
     window.setTimeout = function(callback, delay = 0, ...args) {
@@ -84,13 +73,9 @@
     console.info('[AutoBoost v2] setTimeout/setInterval пропатчены для точных таймингов.');
   }
 
-  // 0.4) Патч document.hasFocus() для имитации постоянного фокуса окна
-  // Цель: Заставить сайт думать, что окно браузера всегда находится в фокусе,
-  // обходя логику, которая может приостанавливать процессы при потере фокуса.
   if (document.hasFocus && !document.hasFocus.__ab_patched) {
     const _originalHasFocus = document.hasFocus;
     document.hasFocus = function() {
-      // Всегда возвращаем true. Это не меняет реального фокуса, но обманывает JS.
       return true;
     };
     document.hasFocus.__ab_patched = true;
@@ -102,14 +87,15 @@
    * ------------------------------------------------------------- */
   const DEF = {
     enabled:         true,
-    autoAC:          true, // Auto Collector
-    autoSM:          true, // Shard Multiplier
-    autoCB:          true, // Conveyor Booster
-    autoFarm:        true, // Farm Reward
-    keepAlive:       true, // Keep-Alive (имитация активности)
-    autoReload:      true, // Автоматическая перезагрузка страницы
-    reloadMinutes:   50,   // Интервал перезагрузки
-    logEach:         10    // Интервал логирования в консоль
+    autoAC:          true,
+    autoSM:          true,
+    autoCB:          true,
+    autoFarm:        true,
+    autoRefine:      true,
+    keepAlive:       true,
+    autoReload:      true,
+    reloadMinutes:   50,
+    logEach:         10
   };
   const LS_CFG    = 'gu-autoboost-config';
   const LS_STATS = 'gu-autoboost-stats';
@@ -117,30 +103,25 @@
   let cfg   = loadConfig();
   let stats = loadStats();
 
-  /** Загрузка конфигурации из localStorage */
   function loadConfig(){
     try{ return {...DEF, ...JSON.parse(localStorage.getItem(LS_CFG)||'{}')}; }
     catch(e){ console.error('[AutoBoost v2] Ошибка чтения конфига:',e); return {...DEF}; }
   }
-  /** Сохранение конфигурации в localStorage */
   function saveConfig(){ localStorage.setItem(LS_CFG, JSON.stringify(cfg)); }
 
-  /** Загрузка статистики из sessionStorage */
   function loadStats(){
     try{
       return JSON.parse(sessionStorage.getItem(LS_STATS)) || {
         reloadCount: 0,
-        clickCount: { autoAC:0, autoSM:0, autoCB:0, autoFarm:0 }
+        clickCount: { autoAC:0, autoSM:0, autoCB:0, autoFarm:0, autoRefine:0 }
       };
     }catch(e){
       console.error('[AutoBoost v2] Ошибка чтения статистики:',e);
-      return { reloadCount: 0, clickCount:{autoAC:0,autoSM:0,autoCB:0,autoFarm:0} };
+      return { reloadCount: 0, clickCount:{autoAC:0,autoSM:0,autoCB:0,autoFarm:0,autoRefine:0} };
     }
   }
-  /** Сохранение статистики в sessionStorage */
   function saveStats(){ sessionStorage.setItem(LS_STATS, JSON.stringify(stats)); }
 
-  /** Генератор случайного числа в диапазоне */
   const rnd = (min,max)=> min + Math.random()*(max-min)|0;
 
   /* ---------------------------------------------------------------
@@ -149,18 +130,15 @@
   setInterval(()=>{
     if(!cfg.keepAlive) return;
 
-    // Инициируем сетевую активность для поддержания соединения и обхода AFK на сервере
     fetch('/favicon.ico',{cache:'no-store',mode:'no-cors'}).catch(()=>{});
 
     const body = document.body;
     if (body) {
       const rect = body.getBoundingClientRect();
       const x = rect.left + Math.random()*rect.width;
-      const y = rect.top  + Math.random()*rect.height;
+      const y = rect.top  + Math.random()*rect.height;
 
-      // Имитируем полный спектр событий мыши и указателя
       ['mousemove', 'mousedown', 'mouseup', 'click', 'pointermove', 'pointerdown', 'pointerup'].forEach(type => {
-        // isTrusted уже обрабатывается патчем 0.1
         body.dispatchEvent(new MouseEvent(type, {
           bubbles:true, cancelable:true, view:window,
           button:0, buttons:(type==='mousedown'||type==='pointerdown')?1:0,
@@ -169,75 +147,68 @@
       });
     }
 
-    // Имитируем незначительную прокрутку страницы
     window.scrollBy(0, rnd(-1,1));
 
-    // Имитируем нажатия и отпускания клавиш
     document.dispatchEvent(new KeyboardEvent('keydown',{key:' ',code:'Space',bubbles:true}));
-    document.dispatchEvent(new KeyboardEvent('keyup'  ,{key:' ',code:'Space',bubbles:true}));
+    document.dispatchEvent(new KeyboardEvent('keyup'  ,{key:' ',code:'Space',bubbles:true}));
 
-    // Имитируем события фокуса/потери фокуса на уровне документа
-    // Несмотря на патч document.hasFocus(), некоторые скрипты могут напрямую слушать эти события.
     document.dispatchEvent(new Event('focus', {bubbles:true}));
-    document.dispatchEvent(new Event('blur', {bubbles:true})); // Можно dispatch'ить focus/blur по очереди, или только focus
+    document.dispatchEvent(new Event('blur', {bubbles:true}));
 
-  }, rnd(90,120)*1000); // Интервал активности 90-120 секунд
+  }, rnd(90,120)*1000);
 
   /* ---------------------------------------------------------------
    * 3) Перехват fetch — Обработка ошибок 429 / 403
    * ------------------------------------------------------------- */
   let backoffUntil = 0;
-  const nativeFetch = window.fetch.bind(window); // Сохраняем оригинальный fetch
+  const nativeFetch = window.fetch.bind(window);
   window.fetch = async (...args) => {
     try {
       const res = await nativeFetch(...args);
       if(res.status===429){
-        backoffUntil = Date.now()+5*60*1000; // Пауза на 5 минут при 429 Too Many Requests
+        backoffUntil = Date.now()+5*60*1000;
         console.warn('[AutoBoost v2] Обнаружен 429 (Too Many Requests) → ставим паузу 5 мин.');
       }
       if(res.status===403){
         console.warn('[AutoBoost v2] Обнаружен 403 (Forbidden) → выполняем жёсткую перезагрузку.');
-        hardReload(); // Жесткая перезагрузка при 403 Forbidden
+        hardReload();
       }
       return res;
     } catch (error) {
       console.error('[AutoBoost v2] Ошибка при выполнении fetch запроса:', error);
-      // Возможно, также стоит добавить логику для обработки сетевых ошибок (например, Offline)
-      throw error; // Перебрасываем ошибку, чтобы остановить оригинальную логику fetch
+      throw error;
     }
   };
 
   /* ---------------------------------------------------------------
-   * 4) Автоматический клик бустеров + сбор фермы
+   * 4) Автоматический клик бустеров + сбор фермы + Refinery
    * ------------------------------------------------------------- */
   const LABELS = {
-    autoAC  : 'auto collector',
-    autoSM  : 'shard multiplier',
-    autoCB  : 'conveyor booster',
-    autoFarm: 'farm reward'
+    autoAC:     'auto collector',
+    autoSM:     'shard multiplier',
+    autoCB:     'conveyor booster',
+    autoFarm:   'farm reward',
+    autoRefine: 'start refining'
   };
-  const timers   = {}; // Для хранения таймаутов планировщика
-  const lastClick= {}; // Время последнего клика по каждой кнопке
-  const nextLog  = { value: Date.now() }; // Для ограничения частоты логирования
+  const timers    = {};
+  const lastClick = {};
+  const nextLog   = { value: Date.now() };
 
-  /** Поиск кнопки на странице по началу её текстового содержимого */
   function findBtn(text){
     return [...document.querySelectorAll('button')]
       .find(b => b.innerText.toLowerCase().startsWith(text.toLowerCase()));
   }
 
-  /** Парсинг оставшегося времени кулдауна кнопки */
   function getCooldown(btn){
-    if(!btn || btn.disabled===false) return 0; // Кнопка активна или не существует
-    if(/activating/i.test(btn.innerText)) return 3000; // Если кнопка в состоянии "activating"
-    const m = /(\d+)\s*m.*?(\d+)\s*s/i.exec(btn.innerText); // Парсим "Xm Ys"
+    if(!btn || btn.disabled===false) return 0;
+    if(/activating/i.test(btn.innerText)) return 3000;
+    const m = /(\d+)\s*m.*?(\d+)\s*s/i.exec(btn.innerText);
     if(m) return (60*+m[1] + +m[2])*1000;
-    const s = /(\d+)\s*s/i.exec(btn.innerText); // Парсим "Xs"
+    const s = /(\d+)\s*s/i.exec(btn.innerText);
     if(s) return (+s[1])*1000;
-    return 600000; // Дефолтный кулдаун 10 минут, если не удалось распарсить
+    return 600000;
   }
 
-  /** Эмуляция "честного" клика по DOM-элементу */
   function doClick(el){
     if(!el) {
       console.warn('[AutoBoost v2] Попытка клика по несуществующему элементу.');
@@ -248,60 +219,122 @@
       console.warn('[AutoBoost v2] Попытка клика по невидимому элементу (нулевая ширина/высота).');
       return;
     }
-    const x = rect.left + Math.random()*rect.width;  // Случайная координата X в пределах кнопки
-    const y = rect.top  + Math.random()*rect.height; // Случайная координата Y в пределах кнопки
+    const x = rect.left + Math.random()*rect.width;
+    const y = rect.top  + Math.random()*rect.height;
 
-    // Диспетчеризация последовательности событий для имитации реального клика
-    // isTrusted: true гарантируется нашим патчем 0.1
     ['mousedown','mouseup','click'].forEach(type=>
       el.dispatchEvent(new MouseEvent(type,{
-        bubbles:true,      // Событие всплывает
-        cancelable:true,   // Событие может быть отменено
-        view:window,       // Представление окна, где произошло событие
-        button:0,          // Основная кнопка мыши (левая)
-        buttons:type==='mousedown'?1:0, // Состояние кнопок (1 - нажата левая)
-        clientX:x,clientY:y // Координаты клика
+        bubbles:true,
+        cancelable:true,
+        view:window,
+        button:0,
+        buttons:type==='mousedown'?1:0,
+        clientX:x,clientY:y
       }))
     );
   }
 
-  /** Планировщик кликов для бустеров и фермы */
   function schedule(key){
-    clearTimeout(timers[key]); // Очищаем предыдущий таймер
+    clearTimeout(timers[key]);
 
-    // Если активен бэкофф (после 429), планируем повтор через некоторое время
     if(Date.now()<backoffUntil){
       timers[key] = setTimeout(()=>schedule(key), backoffUntil-Date.now()+1000);
       return;
     }
-    // Если скрипт выключен в UI, просто ждем 3 секунды
     if(!cfg.enabled){
       timers[key] = setTimeout(()=>schedule(key), 3000);
       return;
     }
 
     const btn = findBtn(LABELS[key]);
-    const cd  = getCooldown(btn); // Получаем кулдаун кнопки
+    const cd  = getCooldown(btn);
 
-    if(cd===0){ // Если кулдаун равен 0 (кнопка готова к клику)
-      const since = Date.now()-(lastClick[key]||0); // Время с последнего клика
-      const gap   = 8000 + rnd(0,2000); // Случайная задержка между кликами (8-10 секунд)
-      if(cfg[key] && btn && !btn.disabled && since>gap){ // Если опция включена, кнопка существует, не заблокирована и прошла задержка
-        doClick(btn); // Выполняем клик
-        lastClick[key] = Date.now(); // Обновляем время последнего клика
-        stats.clickCount[key]++; saveStats(); updateStatsUI(); // Обновляем статистику
-        log(`⚡ ${key} кликнут.`); // Логируем событие
+    // Дополнительная логика для autoRefine
+    if (key === 'autoRefine') {
+      // *** ОБЯЗАТЕЛЬНО ПРОВЕРЬТЕ ЭТОТ СЕЛЕКТОР! ***
+      // Он ищет родительский div, содержащий "Your Shards" и "Required"
+      const refineryInfoContainer = document.querySelector('div.grid.grid-cols-2.gap-4'); // Это общий контейнер для Your Shards и Required
+      let currentPoints = 0;
+      let requiredPoints = 0;
+
+      if (refineryInfoContainer) {
+        // Ищем элемент с "Your Shards" (например, первый div в контейнере, содержащий текст "Your Shards")
+        const yourShardsElement = refineryInfoContainer.querySelector('div:first-child .font-mono.text-xl.leading-tight.text-white');
+        if (yourShardsElement) {
+          currentPoints = parseInt(yourShardsElement.innerText.replace(/[^0-9]/g, '')) || 0;
+        }
+
+        // Ищем элемент с "Required" (например, второй div в контейнере, содержащий текст "Required")
+        const requiredShardsElement = refineryInfoContainer.querySelector('div:last-child .font-mono.text-xl.leading-tight.text-white');
+        if (requiredShardsElement) {
+          requiredPoints = parseInt(requiredShardsElement.innerText.replace(/[^0-9]/g, '')) || 0;
+        }
       }
-      timers[key] = setTimeout(()=>schedule(key),1000); // Проверяем каждую секунду, если кнопка готова
+
+      if (btn && btn.disabled) { // Если кнопка заблокирована, возможно, поинтов недостаточно
+        if (currentPoints < requiredPoints) {
+          log(`Refinery: Недостаточно шардов. Нужно ${requiredPoints}, у вас ${currentPoints}.`);
+          timers[key] = setTimeout(() => schedule(key), 5000 + rnd(0, 5000)); // Проверяем через 5-10 секунд
+          return;
+        }
+      }
+      if (currentPoints >= requiredPoints && btn && !btn.disabled) {
+        // Если поинтов достаточно и кнопка активна, пробуем кликнуть немедленно
+        const since = Date.now() - (lastClick[key] || 0);
+        const gap = 5000 + rnd(0, 2000); // Задержка 5-7 секунд после успешного клика
+        if (cfg[key] && since > gap) {
+          doClick(btn);
+          lastClick[key] = Date.now();
+          stats.clickCount[key]++; saveStats(); updateStatsUI();
+          log(`⚡ ${key} кликнут. Шардов: ${currentPoints}, Требуется: ${requiredPoints}.`);
+          // После клика, планируем следующую проверку через 15-20 секунд, чтобы дать UI обновиться
+          timers[key] = setTimeout(() => schedule(key), 15000 + rnd(0, 5000));
+          return;
+        }
+      } else {
+        // Если поинтов недостаточно или кнопка неактивна по другой причине
+        log(`Refinery: Кнопка "${LABELS[key]}" недоступна или ожидает. Шардов: ${currentPoints}, Требуется: ${requiredPoints}.`);
+        timers[key] = setTimeout(() => schedule(key), 5000 + rnd(0, 5000)); // Повторная проверка через 5-10 секунд
+        return;
+      }
+    }
+
+
+    if(cd===0){
+      const since = Date.now()-(lastClick[key]||0);
+      const gap   = 8000 + rnd(0,2000);
+
+      // Дополнительная логика для autoFarm: сбор раз в 8 часов
+      if (key === 'autoFarm') {
+          const eightHoursMs = 8 * 60 * 60 * 1000;
+          const farmGracePeriod = 5 * 60 * 1000;
+          const nextFarmTime = (lastClick[key] || 0) + eightHoursMs;
+
+          if (Date.now() < nextFarmTime) {
+              const remaining = nextFarmTime - Date.now();
+              log(`⏳ ${key}: следующий сбор через ${Math.round(remaining / 1000 / 60)} мин.`);
+              timers[key] = setTimeout(() => schedule(key), remaining + rnd(0, farmGracePeriod));
+              return;
+          }
+      }
+
+
+      if(cfg[key] && btn && !btn.disabled && since>gap){
+        doClick(btn);
+        lastClick[key] = Date.now();
+        stats.clickCount[key]++; saveStats(); updateStatsUI();
+        log(`⚡ ${key} кликнут.`);
+      }
+      timers[key] = setTimeout(()=>schedule(key),1000);
     }else{
-      const delay = cd + 1000 + rnd(0,1500); // Планируем клик после окончания кулдауна + небольшая случайная задержка
-      log(`⏳ ${key}: следующий клик через ${Math.round(cd/1000)} с.`); // Логируем кулдаун
+      const delay = cd + 1000 + rnd(0,1500);
+      log(`⏳ ${key}: следующий клик через ${Math.round(cd/1000)} с.`);
       timers[key] = setTimeout(()=>schedule(key), delay);
     }
   }
-  /** Запуск всех авто-кликов (кроме фермы, она отдельно) */
+
   function startAll(){
-    Object.keys(LABELS).forEach(key=> key!=='autoFarm' && schedule(key));
+    Object.keys(LABELS).forEach(key => schedule(key));
   }
 
   /* ---------------------------------------------------------------
@@ -309,18 +342,16 @@
    * ------------------------------------------------------------- */
   let reloadTimer = null;
   function scheduleReload(){
-    clearTimeout(reloadTimer); // Очищаем предыдущий таймер перезагрузки
-    if(!cfg.autoReload) return; // Если опция выключена, выходим
-    const ms = cfg.reloadMinutes*60*1000; // Время до перезагрузки в миллисекундах
+    clearTimeout(reloadTimer);
+    if(!cfg.autoReload) return;
+    const ms = cfg.reloadMinutes*60*1000;
     console.info(`[AutoBoost v2] Следующая перезагрузка через ${cfg.reloadMinutes} мин.`);
     reloadTimer = setTimeout(()=>{
-      stats.reloadCount++; saveStats(); updateStatsUI(); // Обновляем статистику перезагрузок
-      hardReload(); // Выполняем жесткую перезагрузку
+      stats.reloadCount++; saveStats(); updateStatsUI();
+      hardReload();
     }, ms);
   }
-  /** Выполнение жесткой перезагрузки страницы */
   function hardReload(){
-    // Добавляем случайный параметр к URL, чтобы избежать кэширования
     location.replace(location.pathname+'?_='+Date.now());
   }
 
@@ -328,77 +359,64 @@
    * 6) Keep-alive для Vercel (при использовании edge-функций)
    * ------------------------------------------------------------- */
   function scheduleVercel(){
-    if(!cfg.keepAlive) return; // Если Keep-Alive выключен
-    const ms = rnd(50,55)*60*1000; // Интервал пинга Vercel (50-55 минут)
+    if(!cfg.keepAlive) return;
+    const ms = rnd(50,55)*60*1000;
     console.info(`[AutoBoost v2] Пинг Vercel через ≈${Math.round(ms/60000)} мин.`);
     setTimeout(()=>{
-      // Создаем и удаляем невидимый iframe, который загружает главную страницу
-      // Это имитирует запрос к серверу, поддерживая "живое" соединение.
       const f=document.createElement('iframe');
       f.style.display='none'; f.src='/';
       document.body.append(f);
-      setTimeout(()=>f.remove(),15000); // Удаляем iframe через 15 секунд
-      scheduleVercel(); // Планируем следующий пинг
+      setTimeout(()=>f.remove(),15000);
+      scheduleVercel();
     }, ms);
-  }
-
-  /* ---------------------------------------------------------------
-   * 7) Автоматический сбор фермы раз в 8 часов
-   * ------------------------------------------------------------- */
-  let farmInterval = null;
-  function doFarm(){
-    if(!cfg.autoFarm) return; // Если авто-ферма выключена
-    const b = findBtn(LABELS.autoFarm); // Ищем кнопку фермы
-    if(b && !b.disabled){ // Если кнопка существует и не заблокирована
-      doClick(b); // Кликаем по ней
-      stats.clickCount.autoFarm++; saveStats(); updateStatsUI(); // Обновляем статистику
-      console.info('[AutoBoost v2] 🌾 Клик по кнопке фермы.');
-    }
-  }
-  function scheduleFarm(){
-    clearInterval(farmInterval); // Очищаем предыдущий интервал
-    if(!cfg.autoFarm) return; // Если опция выключена
-    doFarm(); // Выполняем первый сбор сразу
-    farmInterval = setInterval(doFarm, 8*60*60*1000 + rnd(0,5*60*1000)); // Планируем сбор каждые 8 часов + случайная задержка
   }
 
   /* ---------------------------------------------------------------
    * 8) Инициализация скрипта
    * ------------------------------------------------------------- */
   function init(){
-    // Ждем появления ключевых кнопок на странице перед запуском основных функций.
-    // Используем requestAnimationFrame, чтобы не блокировать основной поток.
-    if(!findBtn(LABELS.autoAC) && !findBtn(LABELS.autoSM) && !findBtn(LABELS.autoCB)){
+    const isRefineryPage = window.location.pathname.includes('/refinery');
+
+    let buttonsToCheck = [];
+    if (isRefineryPage) {
+      buttonsToCheck = [LABELS.autoRefine];
+    } else {
+      buttonsToCheck = [LABELS.autoAC, LABELS.autoSM, LABELS.autoCB, LABELS.autoFarm];
+    }
+
+    // Проверяем, есть ли хотя бы одна из нужных кнопок
+    const relevantButtonFound = buttonsToCheck.some(label => findBtn(label));
+
+    if (!relevantButtonFound) {
       requestAnimationFrame(init);
       return;
     }
+
     console.info('✅ AutoBoost v2 инициализирован и готов к работе.');
-    startAll();       // Запускаем автоматические клики по бустерам
-    scheduleReload(); // Планируем автоматическую перезагрузку
-    scheduleVercel(); // Запускаем Keep-Alive для Vercel
-    scheduleFarm();   // Запускаем автоматический сбор фермы
+    startAll();
+    scheduleReload();
+    scheduleVercel();
   }
 
   /* ---------------------------------------------------------------
    * 9) Логирование с ограничением частоты
    * ------------------------------------------------------------- */
   function log(msg){
-    if(!cfg.logEach) return; // Если логирование выключено (logEach = 0)
+    if(!cfg.logEach) return;
     const now = Date.now();
-    if(now >= nextLog.value){ // Если прошло достаточно времени с последнего лога
+    if(now >= nextLog.value){
       console.log(`[AutoBoost v2] ${msg}`);
-      nextLog.value = now + cfg.logEach*1000; // Планируем следующий лог
+      nextLog.value = now + cfg.logEach*1000;
     }
   }
 
   /* ---------------------------------------------------------------
    * 10) Пользовательский интерфейс (UI) + статистика
    * ------------------------------------------------------------- */
-  let updateStatsUI = ()=>{}; // Функция для обновления UI, будет переопределена
+  let updateStatsUI = ()=>{};
   function renderUI(){
-    if(document.querySelector('.gu-gear')) return; // Предотвращаем дублирование UI
+    if(document.querySelector('.gu-gear')) return;
 
-    // CSS стили для UI
     const css = `
       .gu-gear{
         position:fixed;top:12px;right:12px;width:36px;height:36px;
@@ -422,7 +440,6 @@
       .gu-panel button:hover{background:#555}
       .stat-value{font-weight:bold;color:#4caf50}`;
 
-    // HTML структура UI
     const html = `
       <div class="gu-gear">⚙️</div>
       <div class="gu-panel" style="display:none">
@@ -430,7 +447,8 @@
         <div class="row"><label><input id="gu-ac" type="checkbox"> Auto Collector</label></div>
         <div class="row"><label><input id="gu-sm" type="checkbox"> Shard Multiplier</label></div>
         <div class="row"><label><input id="gu-cb" type="checkbox"> Conveyor Booster</label></div><hr/>
-        <div class="row"><label><input id="gu-farm" type="checkbox"> Auto Farm (8 ч)</label></div><hr/>
+        <div class="row"><label><input id="gu-farm" type="checkbox"> Auto Farm (8 ч)</label></div>
+        <div class="row"><label><input id="gu-refine" type="checkbox"> Auto Refinery</label></div><hr/>
         <div class="row"><label><input id="gu-ka" type="checkbox"> Keep-Alive (анти-AFK)</label></div>
         <div class="row"><label><input id="gu-reload" type="checkbox"> Авто-перезагрузка</label></div>
         <div class="row"><label>Интервал (мин)</label><input id="gu-reload-min" type="number" min="1"></div><hr/>
@@ -439,63 +457,60 @@
         <div class="row"><label>Collector кликов:</label><div id="st-ac" class="stat-value">0</div></div>
         <div class="row"><label>Shard кликов:</label><div id="st-sm" class="stat-value">0</div></div>
         <div class="row"><label>Booster кликов:</label><div id="st-cb" class="stat-value">0</div></div>
-        <div class="row"><label>Farm кликов:</label><div id="st-farm" class="stat-value">0</div></div><hr/>
+        <div class="row"><label>Farm кликов:</label><div id="st-farm" class="stat-value">0</div></div>
+        <div class="row"><label>Refinery кликов:</label><div id="st-refine" class="stat-value">0</div></div><hr/>
         <button id="gu-reset">Сбросить настройки и статистику</button>
       </div>`;
 
-    // Вставляем стили и HTML в DOM
     document.head.insertAdjacentHTML('beforeend',`<style>${css}</style>`);
     document.body.insertAdjacentHTML('beforeend',html);
 
-    // Вспомогательная функция для быстрого доступа к элементам по ID
     const $ = s=>document.querySelector(s);
-    const gear  = $('.gu-gear');
+    const gear  = $('.gu-gear');
     const panel = $('.gu-panel');
 
-    // Функция обновления статистики в UI
     updateStatsUI = ()=>{
       $('#st-rel').textContent  = stats.reloadCount;
       $('#st-ac').textContent   = stats.clickCount.autoAC;
       $('#st-sm').textContent   = stats.clickCount.autoSM;
       $('#st-cb').textContent   = stats.clickCount.autoCB;
       $('#st-farm').textContent = stats.clickCount.autoFarm;
+      $('#st-refine').textContent = stats.clickCount.autoRefine;
     };
 
-    /** Синхронизация UI с текущей конфигурацией */
     function syncUI(){
       $('#gu-enabled').checked      = cfg.enabled;
       $('#gu-ac').checked           = cfg.autoAC;
       $('#gu-sm').checked           = cfg.autoSM;
       $('#gu-cb').checked           = cfg.autoCB;
       $('#gu-farm').checked         = cfg.autoFarm;
+      $('#gu-refine').checked       = cfg.autoRefine;
       $('#gu-ka').checked           = cfg.keepAlive;
       $('#gu-reload').checked       = cfg.autoReload;
       $('#gu-reload-min').value     = cfg.reloadMinutes;
       $('#gu-log').value            = cfg.logEach;
       updateStatsUI();
     }
-    syncUI(); // Инициализируем UI текущими настройками
+    syncUI();
 
-    /* Привязываем обработчики событий для элементов UI */
     $('#gu-enabled').onchange     = e=>{ cfg.enabled       = e.target.checked; saveConfig(); startAll(); };
     $('#gu-ac').onchange          = e=>{ cfg.autoAC        = e.target.checked; saveConfig(); };
     $('#gu-sm').onchange          = e=>{ cfg.autoSM        = e.target.checked; saveConfig(); };
     $('#gu-cb').onchange          = e=>{ cfg.autoCB        = e.target.checked; saveConfig(); };
-    $('#gu-farm').onchange        = e=>{ cfg.autoFarm      = e.target.checked; saveConfig(); scheduleFarm(); };
+    $('#gu-farm').onchange        = e=>{ cfg.autoFarm      = e.target.checked; saveConfig(); schedule('autoFarm'); };
+    $('#gu-refine').onchange      = e=>{ cfg.autoRefine    = e.target.checked; saveConfig(); schedule('autoRefine'); };
     $('#gu-ka').onchange          = e=>{ cfg.keepAlive     = e.target.checked; saveConfig(); };
     $('#gu-reload').onchange      = e=>{ cfg.autoReload    = e.target.checked; saveConfig(); scheduleReload(); };
     $('#gu-reload-min').onchange  = e=>{ cfg.reloadMinutes = Math.max(1,~~e.target.value); saveConfig(); scheduleReload(); };
     $('#gu-log').onchange         = e=>{ cfg.logEach       = Math.max(0,~~e.target.value); saveConfig(); };
 
-    // Обработчик кнопки "Сбросить настройки"
     $('#gu-reset').onclick = ()=>{
-      Object.assign(cfg,DEF); // Восстанавливаем настройки по умолчанию
-      stats = { reloadCount:0, clickCount:{autoAC:0,autoSM:0,autoCB:0,autoFarm:0} }; // Сбрасываем статистику
-      saveConfig(); saveStats(); syncUI(); startAll(); scheduleFarm(); console.clear(); // Сохраняем, обновляем UI, перезапускаем процессы, очищаем консоль
+      Object.assign(cfg,DEF);
+      stats = { reloadCount:0, clickCount:{autoAC:0,autoSM:0,autoCB:0,autoFarm:0,autoRefine:0} };
+      saveConfig(); saveStats(); syncUI(); startAll(); console.clear();
       console.info('[AutoBoost v2] Настройки и статистика сброшены.');
     };
 
-    // Обработчик клика по иконке шестерёнки для переключения видимости панели
     gear.onclick = () => {
       panel.style.display = panel.style.display==='none' ? 'block' : 'none';
     };
@@ -504,23 +519,17 @@
   /* ---------------------------------------------------------------
    * 11) Отрисовка UI после появления <body>
    * ------------------------------------------------------------- */
-  // Функция, которая ждет появления тега <body> и затем вызывает колбэк
   const waitBody = fn => document.body ? fn() : setTimeout(()=>waitBody(fn),50);
-  waitBody(renderUI); // Рисуем UI сразу после появления <body>
+  waitBody(renderUI);
 
-  // Восстанавливаем UI, если он был удален сайтом (например, при SPA навигации)
   setInterval(()=> !document.querySelector('.gu-gear') && renderUI(), 10000);
 
   /* ---------------------------------------------------------------
    * 12) Начальная инициализация скрипта
    * ------------------------------------------------------------- */
-  // Запускаем инициализацию либо после полной загрузки DOM, либо сразу, если DOM уже готов.
   if(document.readyState==='complete' || document.readyState==='interactive') init();
-  else window.addEventListener('DOMContentLoaded', init, { once:true }); // Используем DOMContentLoaded для более раннего запуска
+  else window.addEventListener('DOMContentLoaded', init, { once:true });
 
-  /* Наблюдаем за динамическими изменениями DOM */
-  // Если на странице происходят значительные изменения (например, подгрузка нового контента),
-  // перепроверяем наличие кнопок бустеров и перезапускаем планировщики.
   new MutationObserver(m=> m.some(x=>x.type==='childList') && startAll())
     .observe(document.documentElement,{childList:true,subtree:true});
 
