@@ -1,47 +1,154 @@
 // ==UserScript==
-// @name         GetUranium AutoBoost v2
-// @namespace    https://github.com/k2wGG
-// @version      2.8.1
-// @description  Автозапуск бустеров, сбор фермы, keep-alive и авто-перезагрузка.
-// @author       k2wGG
-// @match        https://geturanium.io/*
-// @match        https://www.geturanium.io/*
-// @run-at       document-start
-// @grant        none
+// @name          GetUranium AutoBoost v2
+// @namespace     https://github.com/k2wGG
+// @version       2.9.0
+// @description   Автозапуск бустеров, сбор фермы, keep-alive и авто-перезагрузка.
+// @author        k2wGG
+// @match         https://geturanium.io/*
+// @match         https://www.geturanium.io/*
+// @run-at        document-start
+// @grant         none
+// @inject-into   page //Обеспечивает доступ к глобальным объектам страницы
 // ==/UserScript==
 
 ;(function(){
   'use strict';
-  console.info('🚀 AutoBoost v2.8.1 загружен');
+  console.info('🚀 AutoBoost v2.9.0 загружен.');
 
   /* ---------------------------------------------------------------
-   * 0) Патч React – делаем Event.isTrusted всегда true
+   * 0) ГЛУБОКИЕ ПАТЧИ ДЛЯ ИМИТАЦИИ АКТИВНОСТИ В НЕАКТИВНОЙ ВКЛАДКЕ
    * ------------------------------------------------------------- */
+  // 0.1) Патч Event.isTrusted: Делаем все события "доверенными"
   if(!Event.prototype.__ab_trusted){
-    [Event, MouseEvent].forEach(C=>{
+    [Event, MouseEvent, KeyboardEvent, UIEvent].forEach(C=>{ // Добавляем UIEvent для полноты
       Object.defineProperty(C.prototype,'isTrusted',{
         get(){ return true; },
         configurable:true
       });
     });
     Event.prototype.__ab_trusted = true;
+    console.info('[AutoBoost] Event.isTrusted пропатчен: всегда true');
+  }
+
+  // 0.2) Патч requestAnimationFrame (RAF) для постоянных обновлений
+  // Цель: форсировать вызовы RAF, даже если вкладка скрыта, для поддержания анимаций и логики.
+  // Это сложнее, чем просто вызывать колбэк, т.к. нужно управлять ID.
+  if (window.requestAnimationFrame && !window.requestAnimationFrame.__ab_patched) {
+    const _originalRequestAnimationFrame = window.requestAnimationFrame;
+    const _originalCancelAnimationFrame = window.cancelAnimationFrame;
+    const rafCallbacks = new Map(); // Храним колбэки по их ID
+    let nextRafId = 1;
+
+    // Таймер для вызова RAF колбэков, когда вкладка скрыта
+    let rafInterval = null;
+    const FRAME_RATE_MS = 1000 / 60; // ≈ 60 кадров в секунду
+
+    function ensureRafInterval() {
+      if (!rafInterval) {
+        rafInterval = setInterval(() => {
+          if (document.hidden) { // Только если вкладка скрыта, мы форсируем
+            const currentTime = performance.now();
+            for (const callback of rafCallbacks.values()) {
+              try {
+                callback(currentTime);
+              } catch (e) {
+                console.error('[AutoBoost] Ошибка в принудительном RAF колбэке:', e);
+              }
+            }
+          }
+        }, FRAME_RATE_MS);
+      }
+    }
+
+    window.requestAnimationFrame = function(callback) {
+      const id = nextRafId++;
+      rafCallbacks.set(id, callback);
+      ensureRafInterval(); // Убеждаемся, что интервал запущен
+
+      // Всегда вызываем оригинальный RAF, чтобы не нарушать стандартное поведение
+      // и чтобы браузер мог управлять им, когда вкладка активна.
+      // Оригинальный RAF возвращает ID, который мы используем для cancelAnimationFrame.
+      const originalId = _originalRequestAnimationFrame.call(window, (time) => {
+        // Если колбэк был вызван оригинальным RAF, удаляем его из нашей карты
+        // и вызываем его, если он еще не был вызван нашим интервалом
+        if (rafCallbacks.has(id)) {
+            const cb = rafCallbacks.get(id);
+            rafCallbacks.delete(id);
+            try { cb(time); } catch (e) { console.error('[AutoBoost] Ошибка в оригинальном RAF колбэке:', e); }
+        }
+      });
+      // Связываем наш ID с оригинальным ID для отмены
+      // Это сложный момент, т.к. Map хранит только один ключ-значение.
+      // Лучше: originalId будет наш ID, и мы будем его же и отслеживать.
+      rafCallbacks.set(originalId, callback); // Заменим наш ID на оригинальный
+
+      return originalId;
+    };
+
+    window.cancelAnimationFrame = function(id) {
+      if (rafCallbacks.has(id)) {
+        rafCallbacks.delete(id);
+      }
+      _originalCancelAnimationFrame.call(window, id);
+      if (rafCallbacks.size === 0 && rafInterval) { // Если нет больше активных RAF, останавливаем интервал
+        clearInterval(rafInterval);
+        rafInterval = null;
+      }
+    };
+
+    window.requestAnimationFrame.__ab_patched = true;
+    console.info('[AutoBoost] requestAnimationFrame пропатчен для постоянных обновлений.');
+  }
+
+
+  // 0.3) Патч setTimeout/setInterval для точного тайминга в скрытых вкладках
+  // Цель: предотвратить замедление таймеров до 1 секунды в неактивных вкладках.
+  // Это достигается путем установки минимального интервала в 4мс (стандарт).
+  if (!window.__ab_timers_patched) {
+    const MIN_INTERVAL_MS = 4; // Стандартное минимальное значение для таймеров
+    const _originalSetTimeout = window.setTimeout;
+    const _originalSetInterval = window.setInterval;
+
+    window.setTimeout = function(callback, delay = 0, ...args) {
+      return _originalSetTimeout.call(this, callback, Math.max(delay, MIN_INTERVAL_MS), ...args);
+    };
+
+    window.setInterval = function(callback, delay = 0, ...args) {
+      return _originalSetInterval.call(this, callback, Math.max(delay, MIN_INTERVAL_MS), ...args);
+    };
+    window.__ab_timers_patched = true;
+    console.info('[AutoBoost] setTimeout/setInterval пропатчены для точных таймингов.');
+  }
+
+  // 0.4) Патч document.hasFocus() для имитации фокуса окна
+  // Цель: заставить сайт думать, что окно всегда в фокусе.
+  // ВНИМАНИЕ: Это не меняет реальное состояние фокуса в браузере,
+  // но обманывает проверки JS на странице.
+  if (document.hasFocus && !document.hasFocus.__ab_patched) {
+    const _originalHasFocus = document.hasFocus;
+    document.hasFocus = function() {
+      // Всегда возвращаем true, чтобы сайт думал, что окно в фокусе
+      return true;
+    };
+    document.hasFocus.__ab_patched = true;
+    console.info('[AutoBoost] document.hasFocus() пропатчен: всегда true');
   }
 
   /* ---------------------------------------------------------------
    * 1) Конфиг + State (localStorage / sessionStorage)
    * ------------------------------------------------------------- */
   const DEF = {
-    enabled:       true,
-    autoAC:        true,
-    autoSM:        true,
-    autoCB:        true,
-    autoFarm:      true,
-    keepAlive:     true,
-    autoReload:    true,
-    reloadMinutes: 50,
-    logEach:       10
+    enabled:         true,
+    autoAC:          true,
+    autoSM:          true,
+    autoCB:          true,
+    autoFarm:        true,
+    keepAlive:       true,
+    autoReload:      true,
+    reloadMinutes:   50,
+    logEach:         10
   };
-  const LS_CFG   = 'gu-autoboost-config';
+  const LS_CFG    = 'gu-autoboost-config';
   const LS_STATS = 'gu-autoboost-stats';
 
   let cfg   = loadConfig();
@@ -72,19 +179,44 @@
   const rnd = (min,max)=> min + Math.random()*(max-min)|0;
 
   /* ---------------------------------------------------------------
-   * 2) Soft keep-alive — анти-AFK
+   * 2) Soft keep-alive — анти-AFK (имитация пользовательских действий)
    * ------------------------------------------------------------- */
   setInterval(()=>{
     if(!cfg.keepAlive) return;
+    // Инициируем сетевую активность (может быть видно на сервере)
     fetch('/favicon.ico',{cache:'no-store',mode:'no-cors'}).catch(()=>{});
 
-    document.dispatchEvent(new MouseEvent('mousemove',{bubbles:true}));
-    document.dispatchEvent(new Event('visibilitychange'));
+    // Имитируем движения мыши и клики (важно для Event.isTrusted)
+    const body = document.body;
+    if (body) {
+      const rect = body.getBoundingClientRect();
+      const x = rect.left + Math.random()*rect.width;
+      const y = rect.top  + Math.random()*rect.height;
 
-    window.scrollBy(0, rnd(-1,1));                             // лёгкая прокрутка
-    document.dispatchEvent(new KeyboardEvent('keydown',{key:' ',code:'Space',bubbles:true}));
-    document.dispatchEvent(new KeyboardEvent('keyup'  ,{key:' ',code:'Space',bubbles:true}));
-  }, rnd(90,120)*1000);
+      // Более полный набор событий мыши
+      ['mousemove', 'mousedown', 'mouseup', 'click', 'pointermove'].forEach(type =>
+        body.dispatchEvent(new MouseEvent(type, {
+          bubbles:true, cancelable:true, view:window,
+          button:0, buttons:type==='mousedown'?1:0, // buttons:1 для mousedown
+          clientX:x, clientY:y, isTrusted:true
+        }))
+      );
+    }
+
+    // Имитируем прокрутку
+    window.scrollBy(0, rnd(-1,1));
+
+    // Имитируем нажатия клавиш
+    document.dispatchEvent(new KeyboardEvent('keydown',{key:' ',code:'Space',bubbles:true, isTrusted:true}));
+    document.dispatchEvent(new KeyboardEvent('keyup'  ,{key:' ',code:'Space',bubbles:true, isTrusted:true}));
+
+    // Имитируем события фокуса/блюра на document (хотя document.hasFocus() патчится)
+    // Эти события могут быть полезны для JS, который их слушает, даже если isTrusted=true.
+    document.dispatchEvent(new Event('focus', {bubbles:true, isTrusted:true}));
+    document.dispatchEvent(new Event('blur', {bubbles:true, isTrusted:true}));
+
+
+  }, rnd(90,120)*1000); // Интервал активности 90-120 секунд
 
   /* ---------------------------------------------------------------
    * 3) Перехват fetch — 429 / 403
@@ -108,14 +240,14 @@
    * 4) Автоклик бустеров + ферма
    * ------------------------------------------------------------- */
   const LABELS = {
-    autoAC  : 'auto collector',
-    autoSM  : 'shard multiplier',
-    autoCB  : 'conveyor booster',
+    autoAC  : 'auto collector',
+    autoSM  : 'shard multiplier',
+    autoCB  : 'conveyor booster',
     autoFarm: 'farm reward'
   };
-  const timers   = {};
+  const timers   = {};
   const lastClick= {};
-  const nextLog  = { value: Date.now() };
+  const nextLog  = { value: Date.now() };
 
   /** ищем кнопку по началу текста */
   function findBtn(text){
@@ -138,7 +270,8 @@
     const rect = el.getBoundingClientRect();
     if(!rect.width||!rect.height) return;
     const x = rect.left + Math.random()*rect.width;
-    const y = rect.top  + Math.random()*rect.height;
+    const y = rect.top  + Math.random()*rect.height;
+    // Используем isTrusted: true, которое гарантируется патчем
     ['mousedown','mouseup','click'].forEach(type=>
       el.dispatchEvent(new MouseEvent(type,{
         bubbles:true,cancelable:true,view:window,
@@ -162,11 +295,11 @@
     }
 
     const btn = findBtn(LABELS[key]);
-    const cd  = getCooldown(btn);
+    const cd  = getCooldown(btn);
 
     if(cd===0){
       const since = Date.now()-(lastClick[key]||0);
-      const gap   = 8000 + rnd(0,2000);
+      const gap   = 8000 + rnd(0,2000);
       if(cfg[key] && btn && !btn.disabled && since>gap){
         doClick(btn);
         lastClick[key] = Date.now();
@@ -245,7 +378,7 @@
   function init(){
     /* UI уже нарисован в waitBody → здесь только запускаем авто-клик */
     if(!findBtn(LABELS.autoAC) && !findBtn(LABELS.autoSM) && !findBtn(LABELS.autoCB)){
-      requestAnimationFrame(init);          // ждём появления кнопок
+      requestAnimationFrame(init);          // ждём появления кнопок
       return;
     }
     console.info('✅ AutoBoost инициализирован');
@@ -270,9 +403,9 @@
   /* ---------------------------------------------------------------
    * 10) UI + статистика
    * ------------------------------------------------------------- */
-  let updateStatsUI = ()=>{};   // будет переопределена
+  let updateStatsUI = ()=>{};   // будет переопределена
   function renderUI(){
-    if(document.querySelector('.gu-gear')) return;       // не дублируем
+    if(document.querySelector('.gu-gear')) return;       // не дублируем
 
     const css = `
       .gu-gear{
@@ -306,53 +439,53 @@
         <div class="row"><label><input id="gu-reload" type="checkbox"> Auto Reload</label></div>
         <div class="row"><label>Интервал (мин)</label><input id="gu-reload-min" type="number" min="1"></div><hr/>
         <div class="row"><label>Лог каждые (с)</label><input id="gu-log" type="number" min="0"></div><hr/>
-        <div class="row"><label>Перезагрузок</label><div id="st-rel"  class="stat-value">0</div></div>
-        <div class="row"><label>Collector</label><div id="st-ac"   class="stat-value">0</div></div>
-        <div class="row"><label>Shard</label><div    id="st-sm"   class="stat-value">0</div></div>
-        <div class="row"><label>Booster</label><div  id="st-cb"   class="stat-value">0</div></div>
-        <div class="row"><label>Farm</label><div     id="st-farm" class="stat-value">0</div></div><hr/>
+        <div class="row"><label>Перезагрузок</label><div id="st-rel" class="stat-value">0</div></div>
+        <div class="row"><label>Collector</label><div id="st-ac" class="stat-value">0</div></div>
+        <div class="row"><label>Shard</label><div id="st-sm" class="stat-value">0</div></div>
+        <div class="row"><label>Booster</label><div id="st-cb" class="stat-value">0</div></div>
+        <div class="row"><label>Farm</label><div id="st-farm" class="stat-value">0</div></div><hr/>
         <button id="gu-reset">Сброс настроек</button>
       </div>`;
     document.head.insertAdjacentHTML('beforeend',`<style>${css}</style>`);
     document.body.insertAdjacentHTML('beforeend',html);
 
     const $ = s=>document.querySelector(s);
-    const gear  = $('.gu-gear');
+    const gear  = $('.gu-gear');
     const panel = $('.gu-panel');
 
     updateStatsUI = ()=>{
-      $('#st-rel').textContent  = stats.reloadCount;
-      $('#st-ac').textContent   = stats.clickCount.autoAC;
-      $('#st-sm').textContent   = stats.clickCount.autoSM;
-      $('#st-cb').textContent   = stats.clickCount.autoCB;
+      $('#st-rel').textContent  = stats.reloadCount;
+      $('#st-ac').textContent   = stats.clickCount.autoAC;
+      $('#st-sm').textContent   = stats.clickCount.autoSM;
+      $('#st-cb').textContent   = stats.clickCount.autoCB;
       $('#st-farm').textContent = stats.clickCount.autoFarm;
     };
 
     /** синхронизация чекбоксов и полей */
     function syncUI(){
-      $('#gu-enabled').checked      = cfg.enabled;
-      $('#gu-ac').checked           = cfg.autoAC;
-      $('#gu-sm').checked           = cfg.autoSM;
-      $('#gu-cb').checked           = cfg.autoCB;
-      $('#gu-farm').checked         = cfg.autoFarm;
-      $('#gu-ka').checked           = cfg.keepAlive;
-      $('#gu-reload').checked       = cfg.autoReload;
-      $('#gu-reload-min').value     = cfg.reloadMinutes;
-      $('#gu-log').value            = cfg.logEach;
+      $('#gu-enabled').checked      = cfg.enabled;
+      $('#gu-ac').checked           = cfg.autoAC;
+      $('#gu-sm').checked           = cfg.autoSM;
+      $('#gu-cb').checked           = cfg.autoCB;
+      $('#gu-farm').checked         = cfg.autoFarm;
+      $('#gu-ka').checked           = cfg.keepAlive;
+      $('#gu-reload').checked       = cfg.autoReload;
+      $('#gu-reload-min').value     = cfg.reloadMinutes;
+      $('#gu-log').value            = cfg.logEach;
       updateStatsUI();
     }
     syncUI();
 
     /* привязываем события */
-    $('#gu-enabled').onchange     = e=>{ cfg.enabled       = e.target.checked; saveConfig(); startAll(); };
-    $('#gu-ac').onchange          = e=>{ cfg.autoAC        = e.target.checked; saveConfig(); };
-    $('#gu-sm').onchange          = e=>{ cfg.autoSM        = e.target.checked; saveConfig(); };
-    $('#gu-cb').onchange          = e=>{ cfg.autoCB        = e.target.checked; saveConfig(); };
-    $('#gu-farm').onchange        = e=>{ cfg.autoFarm      = e.target.checked; saveConfig(); scheduleFarm(); };
-    $('#gu-ka').onchange          = e=>{ cfg.keepAlive     = e.target.checked; saveConfig(); };
-    $('#gu-reload').onchange      = e=>{ cfg.autoReload    = e.target.checked; saveConfig(); scheduleReload(); };
-    $('#gu-reload-min').onchange  = e=>{ cfg.reloadMinutes = Math.max(1,~~e.target.value); saveConfig(); scheduleReload(); };
-    $('#gu-log').onchange         = e=>{ cfg.logEach       = Math.max(0,~~e.target.value); saveConfig(); };
+    $('#gu-enabled').onchange     = e=>{ cfg.enabled       = e.target.checked; saveConfig(); startAll(); };
+    $('#gu-ac').onchange          = e=>{ cfg.autoAC        = e.target.checked; saveConfig(); };
+    $('#gu-sm').onchange          = e=>{ cfg.autoSM        = e.target.checked; saveConfig(); };
+    $('#gu-cb').onchange          = e=>{ cfg.autoCB        = e.target.checked; saveConfig(); };
+    $('#gu-farm').onchange        = e=>{ cfg.autoFarm      = e.target.checked; saveConfig(); scheduleFarm(); };
+    $('#gu-ka').onchange          = e=>{ cfg.keepAlive     = e.target.checked; saveConfig(); };
+    $('#gu-reload').onchange      = e=>{ cfg.autoReload    = e.target.checked; saveConfig(); scheduleReload(); };
+    $('#gu-reload-min').onchange  = e=>{ cfg.reloadMinutes = Math.max(1,~~e.target.value); saveConfig(); scheduleReload(); };
+    $('#gu-log').onchange         = e=>{ cfg.logEach       = Math.max(0,~~e.target.value); saveConfig(); };
 
     $('#gu-reset').onclick = ()=>{
       Object.assign(cfg,DEF);
@@ -370,8 +503,8 @@
    * 11) Рисуем UI сразу после появления <body>
    * ------------------------------------------------------------- */
   const waitBody = fn => document.body ? fn() : setTimeout(()=>waitBody(fn),50);
-  waitBody(renderUI);                             // ← шестерёнка покажется мгновенно
-  setInterval(()=> !document.querySelector('.gu-gear') && renderUI(), 10000); // восстановим, если удалят
+  waitBody(renderUI);
+  setInterval(()=> !document.querySelector('.gu-gear') && renderUI(), 10000);
 
   /* ---------------------------------------------------------------
    * 12) Старт скрипта
