@@ -110,14 +110,39 @@ deploy_trap() {
     bun install
     forge build
 
-    echo -e "${WHITE}[5/5] 🔑 Применение конфигурации...${NC}"
-    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY
+    echo -e "${WHITE}[5/5] 📝 Генерация drosera.toml под Hoodi...${NC}"
+    read -p "Введите адрес вашего EVM кошелька (для whitelist): " OPERATOR_ADDR
+
+    # Hoodi config
+    cat > drosera.toml <<EOL
+ethereum_rpc = "https://ethereum-hoodi-rpc.publicnode.com"
+drosera_rpc = "https://relay.testnet.drosera.io"
+eth_chain_id = 560048
+drosera_address = "0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D"
+
+[traps]
+
+[traps.mytrap]
+path = "out/HelloWorldTrap.sol/HelloWorldTrap.json"
+response_contract = "0x183D78491555cb69B68d2354F7373cc2632508C7"
+response_function = "helloworld(string)"
+cooldown_period_blocks = 33
+min_number_of_operators = 1
+max_number_of_operators = 2
+block_sample_size = 10
+private_trap = true
+whitelist = ["$OPERATOR_ADDR"]
+EOL
+
+    read -p "Введите приватный ключ EVM кошелька: " PRIV_KEY
     echo
     export DROSERA_PRIVATE_KEY="$PRIV_KEY"
     drosera apply
 
     success_message "Trap успешно настроен!"
 }
+
+
 
 # Функция установки ноды
 install_node() {
