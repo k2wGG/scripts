@@ -2,7 +2,7 @@
 
 # Имя и версии
 SCRIPT_NAME="drosera"
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.1.0"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/drosera-node-manager.sh"
 
@@ -107,7 +107,6 @@ update_operator_bin() {
         curl -LO "$url"
     fi
     tar -xvf "$file"
-    # Ищем распакованный бинарь (название может быть drosera-operator)
     if [ -f drosera-operator ]; then
         sudo rm -f /usr/bin/drosera-operator
         sudo cp drosera-operator /usr/bin/
@@ -121,8 +120,7 @@ update_operator_bin() {
 deploy_trap() {
     info_message "Запуск процесса деплоя Trap..."
     echo -e "${WHITE}[1/5] 🔄 Обновление инструментов...${NC}"
-    droseraup
-    foundryup
+    droseraup && foundryup
 
     echo -e "${WHITE}[2/5] 📂 Создание директории...${NC}"
     mkdir -p my-drosera-trap && cd my-drosera-trap
@@ -161,13 +159,169 @@ private_trap = true
 whitelist = ["$OPERATOR_ADDR"]
 EOL
 
-    read -p "Введите приватный ключ EVM кошелька: " PRIV_KEY
-    echo
+    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY; echo
     export DROSERA_PRIVATE_KEY="$PRIV_KEY"
     drosera apply
 
     success_message "Trap успешно настроен!"
 }
+
+# === Функция для 2 Trap’ов (workshop-3) ===
+deploy_two_traps() {
+    info_message "Запуск процесса деплоя двух Trap’ов (workshop-3 Discord)..."
+    echo -e "${WHITE}[1/7] 🔄 Обновление инструментов...${NC}"
+    droseraup && foundryup
+
+    echo -e "${WHITE}[2/7] 📂 Создание директории...${NC}"
+    mkdir -p my-drosera-trap && cd my-drosera-trap
+
+    echo -e "${WHITE}[3/7] ⚙️ Настройка Git...${NC}"
+    read -p "Введите вашу Github почту: " GITHUB_EMAIL
+    read -p "Введите ваш Github юзернейм: " GITHUB_USERNAME
+    git config --global user.email "$GITHUB_EMAIL"
+    git config --global user.name "$GITHUB_USERNAME"
+
+    echo -e "${WHITE}[4/7] 🛠️ Инициализация/сборка проекта...${NC}"
+    if [ ! -f foundry.toml ]; then
+        forge init -t drosera-network/trap-foundry-template
+    fi
+    bun install || true
+    forge build
+
+    echo -e "${WHITE}[5/7] 📝 Генерация drosera.toml с двумя Trap...${NC}"
+    read -p "Введите адрес вашего EVM кошелька (для whitelist): " OPERATOR_ADDR
+
+    cat > drosera.toml <<EOL
+ethereum_rpc = "https://ethereum-hoodi-rpc.publicnode.com"
+drosera_rpc = "https://relay.hoodi.drosera.io"
+eth_chain_id = 560048
+drosera_address = "0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D"
+
+[traps]
+
+[traps.mytrap]
+path = "out/HelloWorldTrap.sol/HelloWorldTrap.json"
+response_contract = "0x183D78491555cb69B68d2354F7373cc2632508C7"
+response_function = "helloworld(string)"
+cooldown_period_blocks = 33
+min_number_of_operators = 1
+max_number_of_operators = 2
+block_sample_size = 10
+private_trap = true
+whitelist = ["$OPERATOR_ADDR"]
+
+[traps.discord]
+path = "out/Trap.sol/Trap.json"
+response_contract = "0x25E2CeF36020A736CF8a4D2cAdD2EBE3940F4608"
+response_function = "respondWithDiscordName(string)"
+cooldown_period_blocks = 33
+min_number_of_operators = 1
+max_number_of_operators = 2
+block_sample_size = 10
+private_trap = true
+whitelist = ["$OPERATOR_ADDR"]
+EOL
+
+    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY; echo
+
+    info_message "🚀 Первый apply для деплоя обоих Trap..."
+    drosera apply --private-key "$PRIV_KEY" | tee apply.log
+
+    DISCORD_ADDRESS=$(grep -oE '0x[0-9a-fA-F]{40}' apply.log | tail -1)
+    if [[ -z "$DISCORD_ADDRESS" ]]; then
+        error_message "Не удалось найти address Discord Trap в логе!"
+        exit 1
+    fi
+    info_message "Найден Discord Trap address: $DISCORD_ADDRESS"
+
+    # Вставляем в toml
+    awk -v addr="$DISCORD_ADDRESS" '
+      /^\[traps.discord\]/ { insec=1 }
+      insec && /^whitelist/ && !x { print; print "address = \"" addr "\""; x=1; next }
+      /^\[/ && $0 != "[traps.discord]" { insec=0 }
+      { print }
+    ' drosera.toml > drosera.toml.tmp && mv drosera.toml.tmp drosera.toml
+
+    success_message "address добавлен в drosera.toml!"
+
+    info_message "🚀 Второй apply для регистрации responder..."
+    drosera apply --private-key "$PRIV_KEY" | tee apply2.log
+
+    info_message "📋 Проверка Discord ника в списке:"
+    cast call 0x25E2CeF36020A736CF8a4D2cAdD2EBE3940F4608 \
+         "getDiscordNamesBatch(uint256,uint256)(string[])" 0 2000 \
+         --rpc-url https://ethereum-hoodi-rpc.publicnode.com
+
+    success_message "Оба Trap’а успешно развернуты!"
+}
+
+# === НОВАЯ ФУНКЦИЯ: Cadet Discord Role Trap ===
+deploy_discord_cadet() {
+    info_message "🚀 Настройка Cadet Discord Role Trap..."
+    cd "$HOME/my-drosera-trap" || return 1
+
+    # 1) Создать src/Trap.sol
+    mkdir -p src
+    read -p "Введите ваш Discord username: " DISCORD
+    cat > src/Trap.sol <<EOL
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {ITrap} from "drosera-contracts/interfaces/ITrap.sol";
+
+interface IMockResponse {
+    function isActive() external view returns (bool);
+}
+
+contract Trap is ITrap {
+    address public constant RESPONSE_CONTRACT = 0x25E2CeF36020A736CF8a4D2cAdD2EBE3940F4608;
+    string constant discordName = "${DISCORD}";
+
+    function collect() external view returns (bytes memory) {
+        bool active = IMockResponse(RESPONSE_CONTRACT).isActive();
+        return abi.encode(active, discordName);
+    }
+
+    function shouldRespond(bytes[] calldata data) external pure returns (bool, bytes memory) {
+        (bool active, string memory name) = abi.decode(data[0], (bool, string));
+        if (!active || bytes(name).length == 0) {
+            return (false, bytes(""));
+        }
+        return (true, abi.encode(name));
+    }
+}
+EOL
+
+    # 2) Правка toml
+    info_message "✍️ Обновляем drosera.toml для Cadet Trap..."
+    sed -E -i '
+        s|^path = .*|path = "out/Trap.sol/Trap.json"|
+        s|^response_contract = .*|response_contract = "0x25E2CeF36020A736CF8a4D2cAdD2EBE3940F4608"|
+        s|^response_function = .*|response_function = "respondWithDiscordName(string)"|
+    ' drosera.toml
+
+    # 3) Компиляция и dryrun
+    info_message "📦 Компиляция..."
+    forge build
+    info_message "🔍 Dryrun..."
+    drosera dryrun
+
+    # 4) Deploy
+    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY; echo
+    export DROSERA_PRIVATE_KEY="$PRIV_KEY"
+    drosera apply
+
+    # 5) Ввод адреса для проверки роли
+    read -p "Введите адрес вашего EVM кошелька для проверки роли: " OPERATOR_ADDR
+
+    info_message "⏳ Проверка isResponder..."
+    cast call 0x25E2CeF36020A736CF8a4D2cAdD2EBE3940F4608 \
+         "isResponder(address)(bool)" "$OPERATOR_ADDR" \
+         --rpc-url https://ethereum-hoodi-rpc.publicnode.com
+
+    success_message "✅ Cadet Discord Role Trap развернут! Дождись роли в Discord."
+}
+
 
 install_node() {
     info_message "Запуск установки ноды..."
@@ -180,8 +334,7 @@ install_node() {
         echo "whitelist = [\"$WALLET_ADDRESS\"]"
     } >> "$TARGET_FILE"
 
-    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY
-    echo
+    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY; echo
     export DROSERA_PRIVATE_KEY="$PRIV_KEY"
     cd "$HOME/my-drosera-trap"
     drosera apply
@@ -192,24 +345,21 @@ install_node() {
 register_operator() {
     info_message "Регистрация оператора в сети Hoodi..."
     update_operator_bin
-    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY
-    echo
+    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY; echo
     export DROSERA_PRIVATE_KEY="$PRIV_KEY"
     /usr/bin/drosera-operator register \
       --eth-rpc-url https://ethereum-hoodi-rpc.publicnode.com \
       --eth-private-key "$DROSERA_PRIVATE_KEY" \
       --drosera-address 0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D \
       --eth-chain-id 560048
-    success_message "Регистрация завершена (см. результат выше)."
+    success_message "Регистрация завершена."
 }
 
 start_node() {
     info_message "Запуск ноды Drosera..."
     cd ~
     update_operator_bin
-
-    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY
-    echo
+    read -s -p "Введите приватный ключ EVM кошелька: " PRIV_KEY; echo
     export DROSERA_PRIVATE_KEY="$PRIV_KEY"
 
     SERVER_IP=$(curl -s https://api.ipify.org)
@@ -248,8 +398,7 @@ EOF
     sudo systemctl restart drosera
 
     success_message "Нода успешно запущена!"
-    info_message "Для просмотра логов используйте: journalctl -u drosera.service -f"
-    journalctl -u drosera.service -f
+    info_message "Для логов: journalctl -u drosera.service -f"
 }
 
 remove_node() {
@@ -259,7 +408,7 @@ remove_node() {
     sudo rm /etc/systemd/system/drosera.service
     sudo systemctl daemon-reload
     rm -rf "$HOME/my-drosera-trap"
-    success_message "Нода Drosera успешно удалена!"
+    success_message "Нода успешно удалена!"
 }
 
 display_menu() {
@@ -276,7 +425,8 @@ display_menu() {
     echo -e "${YELLOW}8)${NC} Перезапустить ноду"
     echo -e "${YELLOW}9)${NC} Удалить ноду"
     echo -e "${YELLOW}10)${NC} Выход"
-    echo -ne "\n${BOLD}${WHITE}Выберите действие [1-10]: ${NC}"
+    echo -e "${YELLOW}11)${NC} Cadet Discord Role Trap"
+    echo -ne "\n${BOLD}${WHITE}Выберите действие [1-11]: ${NC}"
 }
 
 ensure_curl
@@ -292,11 +442,12 @@ while true; do
         3) install_node ;;
         4) register_operator ;;
         5) start_node ;;
-        6) info_message "Проверка статуса..."; echo "Ваша нода работает на последней версии" ;;
-        7) info_message "Просмотр логов..."; journalctl -u drosera.service -f ;;
-        8) info_message "Перезапуск ноды..."; sudo systemctl restart drosera; journalctl -u drosera.service -f ;;
+        6) info_message "Проверка статуса..."; echo "Нода работает" ;;
+        7) info_message "Логи..."; journalctl -u drosera.service -f ;;
+        8) info_message "Перезапуск..."; sudo systemctl restart drosera; journalctl -u drosera.service -f ;;
         9) remove_node ;;
         10) echo -e "${GREEN}👋 До свидания!${NC}"; exit 0 ;;
+        11) deploy_discord_cadet ;;
         *) error_message "Неверный ввод, попробуйте снова." ;;
     esac
     echo -ne "\n${WHITE}Нажмите Enter для продолжения...${NC}"
