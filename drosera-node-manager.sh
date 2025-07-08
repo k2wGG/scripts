@@ -2,7 +2,7 @@
 
 # Имя и версии
 SCRIPT_NAME="drosera"
-SCRIPT_VERSION="2.1.0"
+SCRIPT_VERSION="2.1.1"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/drosera-node-manager.sh"
 
