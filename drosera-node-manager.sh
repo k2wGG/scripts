@@ -2,7 +2,7 @@
 
 # Имя и версии
 SCRIPT_NAME="drosera"
-SCRIPT_VERSION="2.1.1"
+SCRIPT_VERSION="2.1.2"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/drosera-node-manager.sh"
 
@@ -424,9 +424,10 @@ display_menu() {
     echo -e "${YELLOW}7)${NC} Логи ноды"
     echo -e "${YELLOW}8)${NC} Перезапустить ноду"
     echo -e "${YELLOW}9)${NC} Удалить ноду"
-    echo -e "${YELLOW}10)${NC} Выход"
-    echo -e "${YELLOW}11)${NC} Cadet Discord Role Trap"
-    echo -ne "\n${BOLD}${WHITE}Выберите действие [1-11]: ${NC}"
+    echo -e "${YELLOW}10)${NC} Cadet Discord Role Trap"
+    echo -e "${YELLOW}11)${NC} Деплой ДВУХ трапов (Discord + HelloWorld)"
+    echo -e "${YELLOW}0)${NC} Выход"
+    echo -ne "\n${BOLD}${WHITE}Выберите действие [0-11]: ${NC}"
 }
 
 ensure_curl
@@ -446,8 +447,9 @@ while true; do
         7) info_message "Логи..."; journalctl -u drosera.service -f ;;
         8) info_message "Перезапуск..."; sudo systemctl restart drosera; journalctl -u drosera.service -f ;;
         9) remove_node ;;
-        10) echo -e "${GREEN}👋 До свидания!${NC}"; exit 0 ;;
-        11) deploy_discord_cadet ;;
+        10) deploy_discord_cadet ;;
+        11) deploy_two_traps ;;
+        0) echo -e "${GREEN}👋 До свидания!${NC}"; exit 0 ;;
         *) error_message "Неверный ввод, попробуйте снова." ;;
     esac
     echo -ne "\n${WHITE}Нажмите Enter для продолжения...${NC}"
