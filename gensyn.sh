@@ -63,21 +63,21 @@ check_versions() {
     fi
 
     # Проверка Node.js
+        # Проверка Node.js
     if command -v node &> /dev/null; then
         NODE_VERSION=$(node -v | sed 's/v//')
         NODE_MAJOR=$(echo $NODE_VERSION | cut -d. -f1)
         if [ "$NODE_MAJOR" -lt 18 ]; then
-            print_error "Требуется Node.js >= 18! Установлено: $NODE_VERSION"
-            exit 1
+            print_warn "Установлена слишком старая версия Node.js ($NODE_VERSION)."
         elif [ "$NODE_MAJOR" -ge 21 ]; then
-            print_warn "Node.js $NODE_VERSION может вызвать проблемы с RL Swarm. Рекомендуется использовать Node.js 20.x LTS!"
+            print_warn "Node.js $NODE_VERSION может вызвать проблемы, рекомендуется 20.x LTS."
         else
             print_ok "Node.js версия подходит: $NODE_VERSION"
         fi
     else
-        print_error "Node.js не найден! Установите Node.js 20.x LTS."
-        exit 1
+        print_warn "Node.js не найден! После выхода из меню запустите пункт «1) Установить зависимости»."
     fi
+
 }
 
 system_update() {
