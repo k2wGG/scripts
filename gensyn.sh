@@ -2,7 +2,7 @@
 
 # Переменные для проверки версии
 SCRIPT_NAME="Gensyn"
-SCRIPT_VERSION="1.1.0"
+SCRIPT_VERSION="1.2.0"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/Gensyn.sh"
 
@@ -45,54 +45,33 @@ check_script_version() {
     fi
 }
 
-check_versions() {
-    # Проверка Python
-    if command -v python3 &> /dev/null; then
-        PYTHON_VERSION=$(python3 -V 2>&1 | awk '{print $2}')
-        PYTHON_MAJOR=$(echo $PYTHON_VERSION | cut -d. -f1)
-        PYTHON_MINOR=$(echo $PYTHON_VERSION | cut -d. -f2)
-        if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 10 ]; }; then
-            print_error "Требуется Python >= 3.10! Установлено: $PYTHON_VERSION"
-            exit 1
-        else
-            print_ok "Python версия подходит: $PYTHON_VERSION"
-        fi
-    else
-        print_error "Python3 не найден! Установите Python 3.10 или новее."
-        exit 1
-    fi
+# Убрана проверка версий Python и Node.js
 
-    # Проверка Node.js
-        # Проверка Node.js
-    if command -v node &> /dev/null; then
-        NODE_VERSION=$(node -v | sed 's/v//')
-        NODE_MAJOR=$(echo $NODE_VERSION | cut -d. -f1)
-        if [ "$NODE_MAJOR" -lt 18 ]; then
-            print_warn "Установлена слишком старая версия Node.js ($NODE_VERSION)."
-        elif [ "$NODE_MAJOR" -ge 21 ]; then
-            print_warn "Node.js $NODE_VERSION может вызвать проблемы, рекомендуется 20.x LTS."
-        else
-            print_ok "Node.js версия подходит: $NODE_VERSION"
-        fi
-    else
-        print_warn "Node.js не найден! После выхода из меню запустите пункт «1) Установить зависимости»."
-    fi
-
-}
-
-system_update() {
-    print_info "Обновление системы и установка основных пакетов..."
-    sudo apt update && sudo apt install -y python3 python3-venv python3-pip curl wget screen git lsof
-    print_ok "Базовые пакеты установлены"
-}
-
-install_node_yarn() {
-    print_info "Установка Node.js и Yarn..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt update && sudo apt install -y nodejs
+system_update_and_install() {
+    print_info "Обновление системы и установка необходимых инструментов разработки..."
+    
+    sudo apt update
+    sudo apt install -y python3 python3-venv python3-pip curl screen git
+    
+    # Установка yarn из официального репозитория
     curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -
-    echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list > /dev/null
+    echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list
     sudo apt update && sudo apt install -y yarn
-    print_ok "Node.js и Yarn установлены"
+    
+    # Установка localtunnel
+    sudo npm install -g localtunnel
+    
+    # Установка Node.js 22.x
+    sudo apt-get update
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+    
+    # Проверка версий
+    node -v
+    sudo npm install -g yarn
+    yarn -v
+    
+    print_ok "Все зависимости установлены"
 }
 
 clone_repo() {
@@ -112,12 +91,11 @@ start_gensyn_screen() {
         cd ~/rl-swarm || exit 1
         python3 -m venv .venv
         source .venv/bin/activate
-        cd modal-login
-        rm -rf node_modules yarn.lock package-lock.json
-        yarn install
-        yarn upgrade && yarn add next@latest && yarn add viem@latest
-        cd ..
+        pip install --force-reinstall trl==0.19.1
         ./run_rl_swarm.sh
+        while true; do
+            sleep 60
+        done
     '
     print_ok "Узел запущен в screen-сессии 'gensyn'. Введите 'screen -r gensyn' для подключения."
 }
@@ -128,6 +106,20 @@ update_node() {
         cd "$HOME/rl-swarm" || exit 1
         git pull
         print_ok "Репозиторий обновлён."
+    else
+        print_error "Папка rl-swarm не найдена"
+    fi
+}
+
+check_current_node_version() {
+    if [ -d "$HOME/rl-swarm" ]; then
+        cd "$HOME/rl-swarm" || { print_error "Не удалось перейти в директорию rl-swarm"; return; }
+        current_version=$(git describe --tags 2>/dev/null)
+        if [ $? -eq 0 ]; then
+            print_ok "Текущая версия ноды: $current_version"
+        else
+            print_warn "Не удалось определить текущую версию (возможно, нет тегов)"
+        fi
     else
         print_error "Папка rl-swarm не найдена"
     fi
@@ -161,7 +153,7 @@ setup_cloudflared_screen() {
     sudo ufw --force enable
 
     if ! command -v cloudflared &> /dev/null; then
-        wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+        wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb  
         sudo dpkg -i cloudflared-linux-amd64.deb
         rm -f cloudflared-linux-amd64.deb
     fi
@@ -176,30 +168,82 @@ setup_cloudflared_screen() {
     print_ok "Cloudflared-туннель запущен в screen 'cftunnel'. Ссылку ищите в выводе ('screen -r cftunnel')."
 }
 
+swap_menu() {
+    while true; do
+        clear
+        display_logo
+        echo -e "\n${clrBold}Управление файлом подкачки:${clrReset}"
+        echo "1) Активный файл подкачки в данный момент"
+        echo "2) Остановка файла подкачки"
+        echo "3) Создание файла подкачки"
+        echo "4) Назад"
+        read -rp "Введите номер: " swap_choice
+        case $swap_choice in
+            1)
+                print_info "Активный файл подкачки:"
+                swapon --show
+                ;;
+            2)
+                print_info "Остановка файла подкачки..."
+                if [ -f /swapfile ]; then
+                    sudo swapoff /swapfile
+                    print_ok "Файл подкачки остановлен"
+                else
+                    print_warn "Файл подкачки /swapfile не найден"
+                fi
+                ;;
+            3)
+                read -rp "Введите размер файла подкачки в ГБ: " swap_size
+                if [[ $swap_size =~ ^[0-9]+$ ]] && [ "$swap_size" -gt 0 ]; then
+                    print_info "Создание файла подкачки размером ${swap_size}ГБ..."
+                    sudo fallocate -l ${swap_size}G /swapfile
+                    sudo mkswap /swapfile
+                    sudo swapon /swapfile
+                    print_ok "Файл подкачки размером ${swap_size}ГБ создан и активирован"
+                else
+                    print_error "Неверный размер. Введите положительное целое число."
+                fi
+                ;;
+            4)
+                return
+                ;;
+            *)
+                print_error "Неверный выбор, попробуйте снова."
+                ;;
+        esac
+        echo -e "\nНажмите Enter для возврата в меню..."
+        read -r
+    done
+}
+
 main_menu() {
     while true; do
         clear
         display_logo
         check_script_version
         echo -e "\n${clrBold}Выберите действие:${clrReset}"
-        echo "1) Установить зависимости (Python, Node, Yarn)"
+        echo "1) Установить зависимости"
         echo "2) Клонировать RL Swarm"
         echo "3) Запустить узел Gensyn в screen (название: gensyn)"
         echo "4) Обновить RL Swarm"
-        echo "5) Удалить RL Swarm (сохранить приватник)"
-        echo "6) Восстановить swarm.pem из бэкапа"
-        echo "7) Запустить HTTPS-туннель Cloudflared (screen: cftunnel)"
-        echo "8) Выход"
+        echo "5) Проверка текущей версии ноды"
+        echo "6) Удалить RL Swarm (сохранить приватник)"
+        echo "7) Восстановить swarm.pem из бэкапа"
+        echo "8) Запустить HTTPS-туннель Cloudflared (screen: cftunnel)"
+        echo "9) Управление файлом подкачки"
+        echo "10) Выход"
         read -rp "Введите номер: " choice
         case $choice in
-            1) system_update; install_node_yarn ;;
+            1) system_update_and_install ;;
             2) clone_repo ;;
             3) start_gensyn_screen ;;
             4) update_node ;;
-            5) delete_rlswarm ;;
-            6) restore_swarm_pem ;;
-            7) setup_cloudflared_screen ;;
-            8) echo -e "${clrGreen}До свидания!${clrReset}"; exit 0 ;;
+            5) check_current_node_version ;;
+            6) delete_rlswarm ;;
+            7) restore_swarm_pem ;;
+            8) setup_cloudflared_screen ;;
+            9) swap_menu ;;
+            10) echo -e "${clrGreen}До свидания!${clrReset}"; exit 0 ;;
             *) print_error "Неверный выбор, попробуйте снова." ;;
         esac
         echo -e "\nНажмите Enter для возврата в меню..."
@@ -207,6 +251,5 @@ main_menu() {
     done
 }
 
-# Запуск проверки версий и главного меню
-check_versions
+# Запуск главного меню (без проверки версий)
 main_menu
