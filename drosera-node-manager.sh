@@ -46,7 +46,7 @@ hr()   { echo -e "${clrDim}─────────────────�
 # Config / Paths
 # -----------------------------
 SCRIPT_NAME="drosera"
-SCRIPT_VERSION="2.1.3"
+SCRIPT_VERSION="3.0.0"
 VERSIONS_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/versions.txt"
 SCRIPT_FILE_URL="https://raw.githubusercontent.com/k2wGG/scripts/main/drosera-node-manager.sh"
 
@@ -127,8 +127,8 @@ tr() {
         m10_cadet) echo "Cadet Discord Role Trap" ;;
         m11_two) echo "Deploy TWO traps (Discord + HelloWorld)" ;;
         m12_versions) echo "Check versions / status" ;;
-        m13_update) echo "Update node" ;;
-        m14_versions_en) echo "Check version" ;;
+        m13_update) echo "Обновить ноду" ;;
+        m14_versions_en) echo "Проверить версию" ;;
         m15_lang) echo "Change language / Сменить язык" ;;
         exit) echo "Exit" ;;
         press_enter) echo "Press Enter to return to menu..." ;;
@@ -192,8 +192,8 @@ tr() {
         m10_cadet) echo "Cadet Discord Role Trap" ;;
         m11_two) echo "Деплой ДВУХ трапов (Discord + HelloWorld)" ;;
         m12_versions) echo "Проверить версии/статус" ;;
-        m13_update) echo "Обновить ноду" ;;
-        m14_versions_en) echo "Проверить версию" ;;
+        m13_update) echo "Обновить ноду (update + restart)" ;;
+        m14_versions_en) echo "Version (English)" ;;
         m15_lang) echo "Сменить язык / Change language" ;;
         exit) echo "Выход" ;;
         press_enter) echo "Нажмите Enter для продолжения..." ;;
@@ -268,9 +268,18 @@ install_dependencies() {
 get_drosera_operator() { command -v drosera-operator 2>/dev/null || echo "$HOME_BIN"; }
 
 get_latest_operator_release_url() {
-  curl -s "https://api.github.com/repos/drosera-network/releases/releases/latest" | \
-    jq -r '.assets[] | select(.name | test("drosera-operator-v.*-x86_64-unknown-linux-gnu.tar.gz")) | .browser_download_url' | head -n1
+  # Pick correct asset by architecture (x86_64 / aarch64)
+  local arch pattern
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64|amd64) pattern="drosera-operator-v.*-x86_64-unknown-linux-gnu\.tar\.gz" ;;
+    aarch64|arm64) pattern="drosera-operator-v.*-aarch64-unknown-linux-gnu\.tar\.gz" ;;
+    *) pattern="drosera-operator-v.*-$(uname -m)-unknown-linux-gnu\.tar\.gz" ;;
+  esac
+  curl -s "https://api.github.com/repos/drosera-network/releases/releases/latest" |
+    jq -r --arg re "$pattern" '.assets[] | select(.name | test($re)) | .browser_download_url' | head -n1
 }
+
 
 get_latest_operator_version() {
   ensure_jq
@@ -353,6 +362,63 @@ print_versions_en() {
 
 # -----------------------------
 # App flows (deploys and node ops)
+
+# Ensure trap deps & remappings exist (supports new package name @drosera/contracts)
+ensure_trap_deps() {
+  # Ensure Drosera contracts and forge-std are available and remapped
+  local have_lib="lib/contracts/src/Trap.sol"
+  local forge_std_core="lib/forge-std/src/Test.sol"
+  local forge_std_nested="lib/contracts/lib/forge-std/src/Test.sol"
+
+  # 1) Contracts via Foundry (preferred)
+  if [[ ! -f "$have_lib" ]]; then
+    forge install drosera-network/contracts || true
+  fi
+
+  # 2) Remap drosera-contracts -> lib/contracts/src
+  if [[ -f foundry.toml ]]; then
+    sed -i 's|drosera-contracts/=node_modules/drosera-contracts/src/|drosera-contracts/=lib/contracts/src/|g' foundry.toml 2>/dev/null || true
+    sed -i 's|drosera-contracts/=node_modules/@drosera/contracts/src/|drosera-contracts/=lib/contracts/src/|g' foundry.toml 2>/dev/null || true
+  fi
+  if [[ -f remappings.txt ]]; then
+    if grep -q '^drosera-contracts/=' remappings.txt; then
+      sed -i 's|^drosera-contracts/=.*|drosera-contracts/=lib/contracts/src/|' remappings.txt
+    else
+      echo 'drosera-contracts/=lib/contracts/src/' >> remappings.txt
+    fi
+  else
+    echo 'drosera-contracts/=lib/contracts/src/' > remappings.txt
+  fi
+
+  # 3) Ensure forge-std present and mapped
+  if [[ ! -f "$forge_std_core" && ! -f "$forge_std_nested" ]]; then
+    forge install foundry-rs/forge-std || true
+  fi
+  local fs_target
+  if [[ -f "$forge_std_core" ]]; then
+    fs_target='lib/forge-std/src/'
+  else
+    fs_target='lib/contracts/lib/forge-std/src/'
+  fi
+  if [[ -f foundry.toml ]]; then
+    sed -i "s|forge-std/=node_modules/forge-std/|forge-std/=$fs_target|g" foundry.toml 2>/dev/null || true
+  fi
+  if [[ -f remappings.txt ]]; then
+    if grep -q '^forge-std/=' remappings.txt; then
+      sed -i "s|^forge-std/=.*|forge-std/=$fs_target|" remappings.txt
+    else
+      echo "forge-std/=$fs_target" >> remappings.txt
+    fi
+  else
+    echo "forge-std/=$fs_target" >> remappings.txt
+  fi
+}
+
+
+
+
+# -----------------------------
+# App flows (deploys and node ops)
 # -----------------------------
 deploy_trap() {
   info "Updating tools (droseraup, foundryup)..."; droseraup || true; foundryup || true
@@ -361,8 +427,11 @@ deploy_trap() {
   read -rp "$(tr enter_user)  " GITHUB_USERNAME
   git config --global user.email "$GITHUB_EMAIL"; git config --global user.name "$GITHUB_USERNAME"
   info "$(tr init_proj)"
-  forge init -t drosera-network/trap-foundry-template
+  if [[ ! -f foundry.toml ]]; then
+    forge init -t drosera-network/trap-foundry-template
+  fi
   bun install || true
+  ensure_trap_deps
   forge build
   read -rp "$(tr ask_whitelist) " OPERATOR_ADDR
   cat > drosera.toml <<EOL
@@ -397,7 +466,9 @@ deploy_two_traps() {
   read -rp "$(tr enter_user)  " GITHUB_USERNAME
   git config --global user.email "$GITHUB_EMAIL"; git config --global user.name "$GITHUB_USERNAME"
   if [[ ! -f foundry.toml ]]; then forge init -t drosera-network/trap-foundry-template; fi
-  bun install || true; forge build
+  bun install || true
+  ensure_trap_deps
+  forge build
   read -rp "$(tr ask_whitelist) " OPERATOR_ADDR
   cat > drosera.toml <<EOL
 ethereum_rpc = "https://ethereum-hoodi-rpc.publicnode.com"
