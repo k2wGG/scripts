@@ -127,8 +127,8 @@ tr() {
         m10_cadet) echo "Cadet Discord Role Trap" ;;
         m11_two) echo "Deploy TWO traps (Discord + HelloWorld)" ;;
         m12_versions) echo "Check versions / status" ;;
-        m13_update) echo "Обновить ноду" ;;
-        m14_versions_en) echo "Проверить версию" ;;
+        m13_update) echo "Update node" ;;
+        m14_versions_en) echo "Check version" ;;
         m15_lang) echo "Change language / Сменить язык" ;;
         exit) echo "Exit" ;;
         press_enter) echo "Press Enter to return to menu..." ;;
@@ -192,8 +192,8 @@ tr() {
         m10_cadet) echo "Cadet Discord Role Trap" ;;
         m11_two) echo "Деплой ДВУХ трапов (Discord + HelloWorld)" ;;
         m12_versions) echo "Проверить версии/статус" ;;
-        m13_update) echo "Обновить ноду (update + restart)" ;;
-        m14_versions_en) echo "Version (English)" ;;
+        m13_update) echo "Обновить ноду" ;;
+        m14_versions_en) echo "Проверить версию ноды" ;;
         m15_lang) echo "Сменить язык / Change language" ;;
         exit) echo "Выход" ;;
         press_enter) echo "Нажмите Enter для продолжения..." ;;
