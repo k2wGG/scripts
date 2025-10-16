@@ -74,7 +74,6 @@ ${clrBold}${clrMag}Select language / Выберите язык${clrReset}"
   esac
 }
 
-
 tr() {
   local k="${1-}"; [[ -z "$k" ]] && return 0
   case "$LANG_CHOICE" in
@@ -141,9 +140,23 @@ tr() {
         unit_logs_hint) echo "For logs: journalctl -u drosera.service -f" ;;
         removing) echo "Removing Drosera node..." ;;
         bad_input) echo "Invalid choice, try again." ;;
+        cf_blocked) echo "Public RPC blocked by Cloudflare / provider (HTTP 403)." ;;
+        ask_alt_rpc) echo "Enter alternative Ethereum RPC URL (HTTP/HTTPS) or leave blank to cancel:" ;;
+        using_alt_rpc) echo "Using alternative RPC for drosera.toml:" ;;
+        retrying) echo "Retrying with the new RPC..." ;;
+        dryrun_ok) echo "Dryrun succeeded." ;;
+        dryrun_fail) echo "Dryrun failed. See the error above." ;;
+        cancel) echo "Cancelled." ;;
+        rpc_protocol_hint) echo "Hint: if your endpoint is HTTP, use http://... (not https://)." ;;
+        not_implemented) echo "Not implemented yet." ;;
+        m16_change_rpc) echo "Change RPC (running node)";;
+        ask_new_rpc) echo "Enter NEW primary Ethereum RPC (http/https):";;
+        ask_new_rpc_backup) echo "Enter NEW backup RPC (optional, blank to skip):";;
+        rpc_changed_ok) echo "RPC updated and service restarted.";;
+
       esac
       ;;
-    *) # ru
+    *)
       case "$k" in
         script_upd_check) echo "Проверка обновлений скрипта..." ;;
         script_upd_found) echo "Найдена новая версия скрипта" ;;
@@ -206,6 +219,20 @@ tr() {
         unit_logs_hint) echo "Для логов: journalctl -u drosera.service -f" ;;
         removing) echo "Удаление ноды Drosera..." ;;
         bad_input) echo "Неверный ввод, попробуйте снова." ;;
+        cf_blocked) echo "Публичный RPC заблокирован Cloudflare/провайдером (HTTP 403)." ;;
+        ask_alt_rpc) echo "Введите альтернативный Ethereum RPC (HTTP/HTTPS) или оставьте пустым для отмены:" ;;
+        using_alt_rpc) echo "Использую альтернативный RPC для drosera.toml:" ;;
+        retrying) echo "Пробую снова с новым RPC..." ;;
+        dryrun_ok) echo "Dryrun выполнен успешно." ;;
+        dryrun_fail) echo "Dryrun завершился ошибкой. См. сообщение выше." ;;
+        cancel) echo "Отменено." ;;
+        rpc_protocol_hint) echo "Подсказка: если у вас HTTP-эндпойнт, укажите http://..., а не https://." ;;
+        not_implemented) echo "Ещё не реализовано." ;;
+        m16_change_rpc) echo "Сменить RPC (для запущенной ноды)";;
+        ask_new_rpc) echo "Введите НОВЫЙ основной Ethereum RPC (http/https):";;
+        ask_new_rpc_backup) echo "Введите НОВЫЙ резервный RPC (опционально, пусто — пропустить):";;
+        rpc_changed_ok) echo "RPC обновлён и сервис перезапущен.";;
+
       esac
       ;;
   esac
@@ -268,7 +295,6 @@ install_dependencies() {
 get_drosera_operator() { command -v drosera-operator 2>/dev/null || echo "$HOME_BIN"; }
 
 get_latest_operator_release_url() {
-  # Pick correct asset by architecture (x86_64 / aarch64)
   local arch pattern
   arch=$(uname -m)
   case "$arch" in
@@ -279,7 +305,6 @@ get_latest_operator_release_url() {
   curl -s "https://api.github.com/repos/drosera-network/releases/releases/latest" |
     jq -r --arg re "$pattern" '.assets[] | select(.name | test($re)) | .browser_download_url' | head -n1
 }
-
 
 get_latest_operator_version() {
   ensure_jq
@@ -322,7 +347,239 @@ update_operator_bin() {
 }
 
 sync_operator_bin() {
-  if [[ -x "$HOME_BIN" ]]; then sudo install -m 0755 "$HOME_BIN" "$USR_BIN"; ok "$(tr bin_updated)"; else err "~/.drosera/bin missing operator"; return 1; fi
+  if [[ -x "$HOME_BIN" ]]; then
+    sudo install -m 0755 "$HOME_BIN" "$USR_BIN"
+    ok "$(tr bin_updated)"
+  else
+    err "~/.drosera/bin missing operator"; return 1
+  fi
+}
+
+# -----------------------------
+# RPC & drosera helpers
+# -----------------------------
+
+# replace/insert ethereum_rpc in TOML
+set_ethereum_rpc_in_toml() {
+  local toml="$1" new_rpc="$2"
+  if grep -qE '^ethereum_rpc\s*=' "$toml" 2>/dev/null; then
+    sed -i "s|^ethereum_rpc\s*=.*|ethereum_rpc = \"${new_rpc}\"|" "$toml"
+  else
+    sed -i "1i ethereum_rpc = \"${new_rpc}\"" "$toml"
+  fi
+}
+
+# heuristic for CF/403/unreachable
+looks_like_rpc_block_error() {
+  grep -qiE 'Cloudflare|Sorry, you have been blocked|HTTP 403|403 Forbidden|DBTransportError|InvalidContentType|Connect|ECONNREFUSED|unreachable|blocked' "$1"
+}
+
+# Run drosera with config path, trying: -c → --config → no-flag in dir
+# usage: drosera_cmd_with_config dryrun /path/to/drosera.toml [extra args...]
+drosera_cmd_with_config() {
+  local subcmd="$1"; shift
+  local toml="$1"; shift || true
+  local tmp rc
+  tmp="$(mktemp)"
+
+  # try -c
+  set +e
+  drosera "$subcmd" -c "$toml" "$@" |& tee "$tmp"
+  rc=${PIPESTATUS[0]}
+  set -e
+  if [[ $rc -eq 0 ]]; then rm -f "$tmp"; return 0; fi
+
+  if grep -qiE 'unexpected argument|unknown option|found argument .-c.' "$tmp"; then
+    : > "$tmp"
+    # try --config
+    set +e
+    drosera "$subcmd" --config "$toml" "$@" |& tee "$tmp"
+    rc=${PIPESTATUS[0]}
+    set -e
+    if [[ $rc -eq 0 ]]; then rm -f "$tmp"; return 0; fi
+
+    if grep -qiE 'unexpected argument|unknown option|found argument .*--config' "$tmp"; then
+      : > "$tmp"
+      # try from config directory w/o flags
+      set +e
+      ( cd "$(dirname "$toml")" && drosera "$subcmd" "$@" ) |& tee "$tmp"
+      rc=${PIPESTATUS[0]}
+      set -e
+      if [[ $rc -eq 0 ]]; then rm -f "$tmp"; return 0; fi
+    fi
+  fi
+
+  cat "$tmp"
+  rm -f "$tmp"
+  return $rc
+}
+
+# Dryrun with fallback (ask for alternate RPC), then apply the same way
+# usage: drosera_apply_with_fallback /path/to/drosera.toml [extra args...]
+
+# Dryrun with fallback (ask for alternate RPC), then apply the same way
+# usage: drosera_apply_with_fallback /path/to/drosera.toml [extra args...]
+# Dryrun & Apply с fallback на альтернативный RPC при CF/403 (по выводу, даже если rc=0)
+# usage: drosera_apply_with_fallback /path/to/drosera.toml [extra drosera args...]
+drosera_apply_with_fallback() {
+  local toml="$1"; shift || true
+  local tmp rc tries max_tries ALT_RPC
+  tmp="$(mktemp)"
+  max_tries=3
+
+  # ---------------------------
+  # 1) DRYRUN с проверкой вывода
+  # ---------------------------
+  tries=0
+  while :; do
+    : > "$tmp"
+    set +e
+    drosera_cmd_with_config dryrun "$toml" "$@" |& tee "$tmp"
+    rc=${PIPESTATUS[0]}
+    set -e
+
+    # если есть признаки блокировки в выводе — считаем это ошибкой dryrun
+    if looks_like_rpc_block_error "$tmp"; then
+      warn "$(tr cf_blocked)"
+      info "$(tr rpc_protocol_hint)"
+      tries=$((tries+1))
+      if (( tries > max_tries )); then
+        err "$(tr dryrun_fail)"; rm -f "$tmp"; return 1
+      fi
+      read -rp "$(tr ask_alt_rpc) " ALT_RPC
+      if [[ -z "$ALT_RPC" ]]; then
+        warn "$(tr cancel)"; rm -f "$tmp"; return 1
+      fi
+      info "$(tr using_alt_rpc) $ALT_RPC"
+      set_ethereum_rpc_in_toml "$toml" "$ALT_RPC"
+      info "$(tr retrying)"
+      continue
+    fi
+
+    # если exit-code ≠ 0 и не было «CF-паттерна» — тоже выходим с ошибкой
+    if [[ $rc -ne 0 ]]; then
+      err "$(tr dryrun_fail)"; rm -f "$tmp"; return $rc
+    fi
+
+    # сюда попадаем, если нет CF-паттернов и rc==0
+    ok "$(tr dryrun_ok)"
+    break
+  done
+
+  # ---------------------------
+  # 2) APPLY с такой же проверкой
+  # ---------------------------
+  tries=0
+  while :; do
+    : > "$tmp"
+    set +e
+    drosera_cmd_with_config apply "$toml" "$@" |& tee "$tmp"
+    rc=${PIPESTATUS[0]}
+    set -e
+
+    # если в выводе опять CF/403 — спросим другой RPC и попробуем снова
+    if looks_like_rpc_block_error "$tmp"; then
+      warn "$(tr cf_blocked)"
+      info "$(tr rpc_protocol_hint)"
+      tries=$((tries+1))
+      if (( tries > max_tries )); then
+        err "Apply failed after retries due to RPC blockage."; rm -f "$tmp"; return 1
+      fi
+      read -rp "$(tr ask_alt_rpc) " ALT_RPC
+      if [[ -z "$ALT_RPC" ]]; then
+        warn "$(tr cancel)"; rm -f "$tmp"; return 1
+      fi
+      info "$(tr using_alt_rpc) $ALT_RPC"
+      set_ethereum_rpc_in_toml "$toml" "$ALT_RPC"
+      info "$(tr retrying)"
+      continue
+    fi
+
+    # обычная ошибка без CF-признаков — выходим с тем кодом
+    if [[ $rc -ne 0 ]]; then
+      rm -f "$tmp"; return $rc
+    fi
+
+    # успех
+    rm -f "$tmp"
+    return 0
+  done
+}
+
+# Обновить RPC у уже запущенной ноды (systemd unit → restart)
+# usage: update_node_rpc "<PRIMARY_RPC>" ["<BACKUP_RPC>"]
+update_node_rpc() {
+  local NEW_RPC="${1:-}"
+  local NEW_BAK="${2:-}"   # можно пустым — тогда не трогаем backup
+
+  if [[ -z "$NEW_RPC" ]]; then
+    echo "[ERROR] Укажите основной RPC. Пример: update_node_rpc http://1.2.3.4:8545"
+    return 1
+  fi
+
+  if [[ ! -f "$SERVICE_FILE" ]]; then
+    echo "[ERROR] Юнит не найден: $SERVICE_FILE"
+    return 1
+  fi
+
+  echo "[INFO] Бэкап юнита → ${SERVICE_FILE}.bak"
+  sudo cp -f "$SERVICE_FILE" "${SERVICE_FILE}.bak"
+
+  # Обновляем --eth-rpc-url
+  if grep -q -- '--eth-rpc-url ' "$SERVICE_FILE"; then
+    sudo sed -E -i "s|--eth-rpc-url[[:space:]]+[^[:space:]]+|--eth-rpc-url ${NEW_RPC}|g" "$SERVICE_FILE"
+  else
+    echo "[WARN] Флаг --eth-rpc-url не найден в юните; проверь ExecStart."
+  fi
+
+  # Обновляем --eth-backup-rpc-url (если дан)
+  if [[ -n "$NEW_BAK" ]]; then
+    if grep -q -- '--eth-backup-rpc-url ' "$SERVICE_FILE"; then
+      sudo sed -E -i "s|--eth-backup-rpc-url[[:space:]]+[^[:space:]]+|--eth-backup-rpc-url ${NEW_BAK}|g" "$SERVICE_FILE"
+    else
+      echo "[INFO] Добавляю --eth-backup-rpc-url в ExecStart."
+      # Вставка прямо после --eth-rpc-url
+      sudo sed -E -i "s|(--eth-rpc-url[[:space:]]+[^[:space:]]+)|\1 \\\n  --eth-backup-rpc-url ${NEW_BAK}|g" "$SERVICE_FILE"
+    fi
+  fi
+
+  echo "[INFO] Перечитываю юниты и перезапускаю сервис..."
+  sudo systemctl daemon-reload
+  sudo systemctl restart "$SERVICE_NAME"
+
+  sleep 2
+  local status; status=$(systemctl is-active "$SERVICE_NAME" || true)
+  echo "[INFO] Статус сервиса: $status"
+  if [[ "$status" != "active" ]]; then
+    echo "[ERROR] Сервис не активен после перезапуска. Смотри логи: journalctl -u ${SERVICE_NAME} -f"
+    return 1
+  fi
+
+  # Показываем, какой RPC реально запущен в процессе
+  local LINE
+  LINE=$(ps -ef | grep -i 'drosera-operator node' | grep -v grep | head -n1 || true)
+  echo "[INFO] Команда процесса:"
+  echo "$LINE"
+
+  local CUR_RPC CUR_BAK
+  CUR_RPC=$(echo "$LINE" | grep -oE -- '--eth-rpc-url[[:space:]]+[^[:space:]]+' | awk '{print $2}' || true)
+  CUR_BAK=$(echo "$LINE" | grep -oE -- '--eth-backup-rpc-url[[:space:]]+[^[:space:]]+' | awk '{print $2}' || true)
+  echo "[INFO] Текущий --eth-rpc-url: ${CUR_RPC:-<не найден>}"
+  echo "[INFO] Текущий --eth-backup-rpc-url: ${CUR_BAK:-<не найден>}"
+
+  # Быстрая проверка доступности RPC:
+  if command -v cast >/dev/null 2>&1; then
+    echo "[INFO] Проверяю block-number через ${CUR_RPC:-$NEW_RPC}…"
+    cast block-number --rpc-url "${CUR_RPC:-$NEW_RPC}" || true
+  else
+    echo "[INFO] cast не найден, пробую curl eth_blockNumber…"
+    curl -s -X POST "${CUR_RPC:-$NEW_RPC}" \
+      -H 'Content-Type: application/json' \
+      --data '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' || true
+    echo
+  fi
+
+  echo "[OK] RPC обновлён."
 }
 
 # -----------------------------
@@ -351,31 +608,25 @@ check_node_version() {
   else
     echo "$(tr node_not_running)"
   fi
-  if [[ -n "${installed:-}" && -n "${latest:-}" && "$installed" != "$latest" ]]; then echo "$(tr update_avail): $installed → $latest"; fi
+  if [[ -n "${installed:-}" && -n "${latest:-}" && "$installed" != "$latest" ]]; then
+    echo "$(tr update_avail): $installed → $latest"
+  fi
 }
 
-print_versions_en() {
-  # Print versions using current language (RU/EN)
-  check_node_version
-}
-
+print_versions_en() { check_node_version; }
 
 # -----------------------------
-# App flows (deploys and node ops)
-
-# Ensure trap deps & remappings exist (supports new package name @drosera/contracts)
+# Trap deps & remappings
+# -----------------------------
 ensure_trap_deps() {
-  # Ensure Drosera contracts and forge-std are available and remapped
   local have_lib="lib/contracts/src/Trap.sol"
   local forge_std_core="lib/forge-std/src/Test.sol"
   local forge_std_nested="lib/contracts/lib/forge-std/src/Test.sol"
 
-  # 1) Contracts via Foundry (preferred)
   if [[ ! -f "$have_lib" ]]; then
     forge install drosera-network/contracts || true
   fi
 
-  # 2) Remap drosera-contracts -> lib/contracts/src
   if [[ -f foundry.toml ]]; then
     sed -i 's|drosera-contracts/=node_modules/drosera-contracts/src/|drosera-contracts/=lib/contracts/src/|g' foundry.toml 2>/dev/null || true
     sed -i 's|drosera-contracts/=node_modules/@drosera/contracts/src/|drosera-contracts/=lib/contracts/src/|g' foundry.toml 2>/dev/null || true
@@ -390,7 +641,6 @@ ensure_trap_deps() {
     echo 'drosera-contracts/=lib/contracts/src/' > remappings.txt
   fi
 
-  # 3) Ensure forge-std present and mapped
   if [[ ! -f "$forge_std_core" && ! -f "$forge_std_nested" ]]; then
     forge install foundry-rs/forge-std || true
   fi
@@ -413,9 +663,6 @@ ensure_trap_deps() {
     echo "forge-std/=$fs_target" >> remappings.txt
   fi
 }
-
-
-
 
 # -----------------------------
 # App flows (deploys and node ops)
@@ -455,7 +702,7 @@ whitelist = ["$OPERATOR_ADDR"]
 EOL
   read -s -rp "$(tr ask_priv) " PRIV_KEY; echo
   export DROSERA_PRIVATE_KEY="$PRIV_KEY"
-  drosera apply
+  drosera_apply_with_fallback "$PWD/drosera.toml"
   ok "Trap deployed"
 }
 
@@ -501,7 +748,10 @@ private_trap = true
 whitelist = ["$OPERATOR_ADDR"]
 EOL
   read -s -rp "$(tr ask_priv) " PRIV_KEY; echo
-  info "First apply..."; drosera apply --private-key "$PRIV_KEY" | tee apply.log
+
+  info "First apply..."
+  drosera_apply_with_fallback "$PWD/drosera.toml" --private-key "$PRIV_KEY" | tee apply.log
+
   DISCORD_ADDRESS=$(grep -oE '0x[0-9a-fA-F]{40}' apply.log | tail -1 || true)
   if [[ -n "${DISCORD_ADDRESS:-}" ]]; then
     awk -v addr="$DISCORD_ADDRESS" '
@@ -511,7 +761,10 @@ EOL
       { print }
     ' drosera.toml > drosera.toml.tmp && mv drosera.toml.tmp drosera.toml
   fi
-  info "Second apply..."; drosera apply --private-key "$PRIV_KEY" | tee apply2.log
+
+  info "Second apply..."
+  drosera_apply_with_fallback "$PWD/drosera.toml" --private-key "$PRIV_KEY" | tee apply2.log
+
   ok "Two traps deployed"
 }
 
@@ -521,10 +774,12 @@ install_node() {
   [[ -f "$TARGET_FILE" ]] && sed -i '/^private_trap/d;/^whitelist/d' "$TARGET_FILE"
   read -rp "$(tr ask_whitelist) " WALLET_ADDRESS
   {
-    echo "private_trap = true"; echo "whitelist = [\"$WALLET_ADDRESS\"]"
+    echo "private_trap = true"
+    echo "whitelist = [\"$WALLET_ADDRESS\"]"
   } >> "$TARGET_FILE"
   read -s -rp "$(tr ask_priv) " PRIV_KEY; echo
-  export DROSERA_PRIVATE_KEY="$PRIV_KEY"; (cd "$HOME/my-drosera-trap" && drosera apply)
+  export DROSERA_PRIVATE_KEY="$PRIV_KEY"
+  ( cd "$HOME/my-drosera-trap" && drosera_apply_with_fallback "$PWD/drosera.toml" )
   ok "Node installed"
 }
 
@@ -580,12 +835,9 @@ EOF
 }
 
 restart_node() { info "$(tr restarting)"; sudo systemctl restart "$SERVICE_NAME"; }
+show_status()  { systemctl status "$SERVICE_NAME" --no-pager || true; }
+follow_logs()  { info "$(tr logs_hint)"; journalctl -u "$SERVICE_NAME" -fn 200; }
 
-show_status() { systemctl status "$SERVICE_NAME" --no-pager || true; }
-
-follow_logs() { info "$(tr logs_hint)"; journalctl -u "$SERVICE_NAME" -fn 200; }
-
-# Safe updater with restart
 update_node_safe() {
   info "$(tr update_node)"
   local latest installed home_ver usr_ver
@@ -615,6 +867,11 @@ remove_node() {
   ok "$(tr removed)"
 }
 
+# optional placeholder so menu item 10 doesn't break
+deploy_discord_cadet() {
+  warn "$(tr not_implemented)"
+}
+
 # -----------------------------
 # Menu
 # -----------------------------
@@ -637,6 +894,7 @@ menu() {
     echo -e "${clrGreen}13)${clrReset} $(tr m13_update)"
     echo -e "${clrGreen}14)${clrReset} $(tr m14_versions_en)"
     echo -e "${clrGreen}15)${clrReset} $(tr m15_lang)"
+    echo -e "${clrGreen}16)${clrReset} $(tr m16_change_rpc)"
     echo -e "${clrGreen}0)${clrReset} $(tr exit)"
     hr
     read -rp "> " choice
@@ -650,12 +908,21 @@ menu() {
       7) follow_logs ;;
       8) restart_node ;;
       9) remove_node ;;
-      10) deploy_discord_cadet ;;  # optional: you can wire your existing function here if you keep it
+      10) deploy_discord_cadet ;;
       11) deploy_two_traps ;;
       12) check_node_version ;;
       13) update_node_safe ;;
       14) print_versions_en ;;
       15) choose_language ;;
+      16)
+        read -rp "$(tr ask_new_rpc) " NEW_RPC
+        read -rp "$(tr ask_new_rpc_backup) " NEW_BAK
+        if [[ -n "$NEW_RPC" ]]; then
+          update_node_rpc "$NEW_RPC" "$NEW_BAK" && ok "$(tr rpc_changed_ok)"
+        else
+          warn "$(tr cancel)"
+        fi
+        ;;
       0) exit 0 ;;
       *) err "$(tr bad_input)" ;;
     esac
