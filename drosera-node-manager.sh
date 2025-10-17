@@ -869,7 +869,134 @@ remove_node() {
 
 # optional placeholder so menu item 10 doesn't break
 deploy_discord_cadet() {
-  warn "$(tr not_implemented)"
+  info "Подготовка окружения (droseraup, foundryup)..."
+  droseraup || true
+  foundryup || true
+
+  mkdir -p "$HOME/my-drosera-trap" && cd "$HOME/my-drosera-trap"
+
+  # Убедимся, что зависимости и remappings настроены (forge-std, drosera-contracts)
+  ensure_trap_deps
+
+  # 1) Создаём контракт DiscordNameTrap.sol
+  read -rp "Введите ваш Discord (без @): " DISCORD_NAME
+  [[ -z "$DISCORD_NAME" ]] && { err "Discord не указан — прерываю."; return 1; }
+
+  mkdir -p src
+  cat > src/DiscordNameTrap.sol <<EOF
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {ITrap} from "drosera-contracts/interfaces/ITrap.sol";
+
+interface IMockResponse {
+    function isActive() external view returns (bool);
+}
+
+contract Trap is ITrap {
+    // Updated response contract address
+    address public constant RESPONSE_CONTRACT = 0x25E2CeF36020A736CF8a4D2cAdD2EBE3940F4608;
+    string constant discordName = "${DISCORD_NAME}"; // your Discord username
+
+    function collect() external view returns (bytes memory) {
+        bool active = IMockResponse(RESPONSE_CONTRACT).isActive();
+        return abi.encode(active, discordName);
+    }
+
+    function shouldRespond(bytes[] calldata data) external pure returns (bool, bytes memory) {
+        (bool active, string memory name) = abi.decode(data[0], (bool, string));
+        if (!active || bytes(name).length == 0) {
+            return (false, bytes(""));
+        }
+        return (true, abi.encode(name));
+    }
+}
+EOF
+
+  # 2) Собираем
+  info "Собираю контракт..."
+  if ! forge build; then
+    warn "forge build завершился ошибкой. Попробуйте: source /root/.bashrc и/или переустановить foundry/bun."
+    return 1
+  fi
+
+  # 3) Готовим drosera.toml под кадет-трап
+  read -rp "Введите адрес вашего оператора (EVM для whitelist): " OP_ADDR
+  [[ -z "$OP_ADDR" ]] && { err "Адрес не указан — прерываю."; return 1; }
+
+  cat > drosera.toml <<EOT
+ethereum_rpc = "https://ethereum-hoodi-rpc.publicnode.com"
+drosera_rpc = "https://relay.hoodi.drosera.io"
+eth_chain_id = 560048
+drosera_address = "0x91cB447BaFc6e0EA0F4Fe056F5a9b1F14bb06e5D"
+
+[traps]
+
+[traps.mytrap]
+path = "out/DiscordNameTrap.sol/Trap.json"
+response_contract = "0x25E2CeF36020A736CF8a4D2cAdD2EBE3940F4608"
+response_function = "respondWithDiscordName(string)"
+cooldown_period_blocks = 33
+min_number_of_operators = 1
+max_number_of_operators = 2
+block_sample_size = 10
+private_trap = true
+whitelist = ["$OP_ADDR"]
+EOT
+
+  # 4) dryrun + apply с автоматическим фоллбеком RPC (использует нашу вспомогательную функцию)
+  read -s -rp "Введите приватный ключ EVM кошелька (для deploy/optin): " PRIV_KEY; echo
+  export DROSERA_PRIVATE_KEY="$PRIV_KEY"
+
+  info "Тестирую трап (dryrun) и применяю (apply)..."
+  if ! drosera_apply_with_fallback "$PWD/drosera.toml" --private-key "$PRIV_KEY" | tee apply.log; then
+    err "Не удалось применить конфиг. Проверьте логи выше."
+    return 1
+  fi
+
+  # 5) Достаём адрес трапа (из drosera.toml или apply.log)
+  TRAP_ADDR="$(awk 'inblk&&/address[[:space:]]*=/{gsub(/[",]/,"",$3);print $3; exit}
+                   /^\[traps\.mytrap\]/{inblk=1} /^\[/{if($0!~/^\[traps\.mytrap\]/) inblk=0}' drosera.toml)"
+  if [[ -z "$TRAP_ADDR" ]]; then
+    TRAP_ADDR="$(grep -oE '0x[0-9a-fA-F]{40}' apply.log | tail -1 || true)"
+  fi
+  if [[ -z "$TRAP_ADDR" ]]; then
+    err "Не удалось определить адрес трапа (trap config address)."
+    return 1
+  fi
+  ok "Trap address: $TRAP_ADDR"
+
+  # 6) opt-in оператора в трап
+  ETH_RPC="$(awk -F'"' '/^ethereum_rpc[[:space:]]*=/{print $2}' drosera.toml)"
+  [[ -z "$ETH_RPC" ]] && ETH_RPC="https://ethereum-hoodi-rpc.publicnode.com"
+
+  info "Делаю opt-in оператора в трап..."
+  if ! drosera-operator optin \
+      --eth-rpc-url "$ETH_RPC" \
+      --eth-private-key "$PRIV_KEY" \
+      --trap-config-address "$TRAP_ADDR"; then
+    warn "optin не удался. Убедитесь, что адрес — это именно адрес ТРАП-КОНФИГА, а RPC указывает на сеть Hoodi."
+  else
+    ok "optin выполнен."
+  fi
+
+  # 7) Перезапуск systemd-сервиса ноды
+  info "Перезапускаю сервис drosera..."
+  sudo systemctl daemon-reload || true
+  sudo systemctl enable drosera || true
+  sudo systemctl restart drosera || true
+  ok "Готово. Сервис перезапущен."
+
+  # 8) Подсказка как проверить, что имя прилетело на ответный контракт
+  cat <<'HINT'
+Чтобы посмотреть, попало ли ваше имя в список:
+  source /root/.bashrc
+  cast call 0x25E2CeF36020A736CF8a4D2cAdD2EBE3940F4608 \
+    "getDiscordNamesBatch(uint256,uint256)(string[])" 0 20000 \
+    --rpc-url https://ethereum-hoodi-rpc.publicnode.com | grep -E 'ВАШ_DISCORD'
+
+Замените ВАШ_DISCORD на ваш ник.
+HINT
 }
 
 # -----------------------------
