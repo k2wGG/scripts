@@ -841,25 +841,45 @@ show_status()  { systemctl status "$SERVICE_NAME" --no-pager || true; }
 follow_logs()  { info "$(tr logs_hint)"; journalctl -u "$SERVICE_NAME" -fn 200; }
 
 update_node_safe() {
-  info "$(tr update_node)"
-  local latest installed home_ver usr_ver
-  latest=$(get_latest_operator_version || echo "")
-  installed=$(get_installed_operator_version || echo "")
-  home_ver=$(get_operator_version_of "$HOME_BIN" || echo "")
-  usr_ver=$(get_operator_version_of "$USR_BIN" || echo "")
-  info "$(tr updater_summary): installed=$installed, /usr/bin=$usr_ver, ~/.drosera=$home_ver, latest=${latest:-unknown}"
-  if command -v droseraup >/dev/null 2>&1; then droseraup || true; home_ver=$(get_operator_version_of "$HOME_BIN" || echo "$home_ver"); fi
-  if [[ -n "$latest" && "$home_ver" == "$latest" ]]; then sync_operator_bin || true; else update_operator_bin || true; fi
-  usr_ver=$(get_operator_version_of "$USR_BIN" || echo "")
-  if [[ -n "$latest" && "$usr_ver" != "$latest" && -x "$HOME_BIN" ]]; then sudo install -m 0755 "$HOME_BIN" "$USR_BIN"; usr_ver=$(get_operator_version_of "$USR_BIN" || echo ""); fi
-  sudo systemctl daemon-reload || true
-  sudo systemctl restart "$SERVICE_NAME" || true
-  sleep 2
-  local status run_pid run_path run_ver
-  status=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)
-  run_pid=$(pgrep -f 'drosera-operator.*node' | head -n1 || true)
-  if [[ -n "$run_pid" ]]; then run_path=$(readlink -f "/proc/$run_pid/exe" 2>/dev/null || true); run_ver=$(get_operator_version_of "$run_path"); fi
-  if [[ "$status" == "active" ]]; then ok "$(tr service_active). $(tr running_ver): ${run_ver:-unknown}"; else err "$(tr service_inactive)"; fi
+  echo "Обновляю бинарь drosera-operator..."
+    curl -s https://raw.githubusercontent.com/drosera-network/operator/main/install.sh | bash
+
+    echo "Перегенерирую systemd unit файл..."
+
+    BIN_PATH=$(which drosera-operator)
+    DATA_DIR="$HOME/.drosera/data"
+
+    sudo mkdir -p "$DATA_DIR"
+
+    sudo bash -c "cat > /etc/systemd/system/drosera.service" <<EOF
+[Unit]
+Description=drosera node service
+After=network.target
+
+[Service]
+User=$USER
+WorkingDirectory=$HOME
+ExecStart=$BIN_PATH node \
+  --data-dir $DATA_DIR \
+  --network-p2p-port 31313 \
+  --server-port 31314 \
+  --http-address 0.0.0.0 \
+  --http-port 31315
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    echo "Перезагружаю systemd..."
+    sudo systemctl daemon-reload
+
+    echo "Перезапускаю ноду..."
+    sudo systemctl restart drosera
+
+    echo "Готово. Проверяю статус:"
+    sudo systemctl status drosera --no-pager
 }
 
 remove_node() {
