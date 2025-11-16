@@ -54,7 +54,7 @@ SERVICE_NAME="drosera"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 HOME_BIN="$HOME/.drosera/bin/drosera-operator"
 USR_BIN="/usr/bin/drosera-operator"
-DB_PATH="$HOME/.drosera.db"
+DATA_DIR="$HOME/.drosera/data"
 
 # -----------------------------
 # Language (RU/EN)
@@ -813,7 +813,7 @@ Restart=always
 RestartSec=15
 LimitNOFILE=65535
 ExecStart=$BIN_PATH node \
-  --db-file-path $DB_PATH \
+  --data-dir $DATA_DIR \
   --network-p2p-port 31313 \
   --server-port 31314 \
   --eth-rpc-url https://ethereum-hoodi-rpc.publicnode.com \
