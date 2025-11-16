@@ -150,6 +150,7 @@ tr() {
         rpc_protocol_hint) echo "Hint: if your endpoint is HTTP, use http://... (not https://)." ;;
         not_implemented) echo "Not implemented yet." ;;
         m16_change_rpc) echo "Change RPC (running node)";;
+        m17_redeploy) "Redeploy of Trap";;
         ask_new_rpc) echo "Enter NEW primary Ethereum RPC (http/https):";;
         ask_new_rpc_backup) echo "Enter NEW backup RPC (optional, blank to skip):";;
         rpc_changed_ok) echo "RPC updated and service restarted.";;
@@ -229,6 +230,7 @@ tr() {
         rpc_protocol_hint) echo "Подсказка: если у вас HTTP-эндпойнт, укажите http://..., а не https://." ;;
         not_implemented) echo "Ещё не реализовано." ;;
         m16_change_rpc) echo "Сменить RPC (для запущенной ноды)";;
+        m17_redeploy) "Сделать Redeploy of Trap";;
         ask_new_rpc) echo "Введите НОВЫЙ основной Ethereum RPC (http/https):";;
         ask_new_rpc_backup) echo "Введите НОВЫЙ резервный RPC (опционально, пусто — пропустить):";;
         rpc_changed_ok) echo "RPC обновлён и сервис перезапущен.";;
@@ -999,6 +1001,41 @@ EOT
 HINT
 }
 
+redeploy_trap() {
+    echo "Перехожу в ~/my-drosera-trap..."
+    cd ~/my-drosera-trap/ || { echo "Папка ~/my-drosera-trap не найдена"; return; }
+
+    if [ ! -f "drosera.toml" ]; then
+        echo "Ошибка: в директории нет drosera.toml"
+        return
+    fi
+
+    echo "Выполняю drosera dryrun..."
+    drosera dryrun
+    if [ $? -ne 0 ]; then
+        echo "dryrun завершился ошибкой"
+        return
+    fi
+
+    echo -n "Введи приватный ключ для redeploy: "
+    read -s PRIV_KEY
+    echo
+
+    if [ -z "$PRIV_KEY" ]; then
+        echo "Приватный ключ пустой"
+        return
+    fi
+
+    echo "Запускаю drosera apply..."
+    DROSERA_PRIVATE_KEY="$PRIV_KEY" drosera apply
+
+    if [ $? -eq 0 ]; then
+        echo "Redeploy завершён успешно"
+    else
+        echo "Ошибка при drosera apply"
+    fi
+}
+
 # -----------------------------
 # Menu
 # -----------------------------
@@ -1022,6 +1059,7 @@ menu() {
     echo -e "${clrGreen}14)${clrReset} $(tr m14_versions_en)"
     echo -e "${clrGreen}15)${clrReset} $(tr m15_lang)"
     echo -e "${clrGreen}16)${clrReset} $(tr m16_change_rpc)"
+    echo -e "${clrGreen}17)${clrReset} $(tr m17_redeploy)"
     echo -e "${clrGreen}0)${clrReset} $(tr exit)"
     hr
     read -rp "> " choice
@@ -1050,6 +1088,7 @@ menu() {
           warn "$(tr cancel)"
         fi
         ;;
+      17) redeploy_trap ;;
       0) exit 0 ;;
       *) err "$(tr bad_input)" ;;
     esac
