@@ -150,7 +150,7 @@ tr() {
         rpc_protocol_hint) echo "Hint: if your endpoint is HTTP, use http://... (not https://)." ;;
         not_implemented) echo "Not implemented yet." ;;
         m16_change_rpc) echo "Change RPC (running node)";;
-        m17_redeploy_trap) "Redeploy of Trap";;
+        m17_redeploy_trap) echo "Redeploy of Trap";;
         ask_new_rpc) echo "Enter NEW primary Ethereum RPC (http/https):";;
         ask_new_rpc_backup) echo "Enter NEW backup RPC (optional, blank to skip):";;
         rpc_changed_ok) echo "RPC updated and service restarted.";;
@@ -230,7 +230,7 @@ tr() {
         rpc_protocol_hint) echo "Подсказка: если у вас HTTP-эндпойнт, укажите http://..., а не https://." ;;
         not_implemented) echo "Ещё не реализовано." ;;
         m16_change_rpc) echo "Сменить RPC (для запущенной ноды)";;
-        m17_redeploy_trap) "Сделать Redeploy of Trap";;
+        m17_redeploy_trap) echo "Сделать Redeploy of Trap";;
         ask_new_rpc) echo "Введите НОВЫЙ основной Ethereum RPC (http/https):";;
         ask_new_rpc_backup) echo "Введите НОВЫЙ резервный RPC (опционально, пусто — пропустить):";;
         rpc_changed_ok) echo "RPC обновлён и сервис перезапущен.";;
